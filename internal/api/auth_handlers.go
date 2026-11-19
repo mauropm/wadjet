@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/mauropm/wadjet/internal/auth"
@@ -83,6 +84,22 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, UserFromContext(r.Context()))
+}
+
+// handleAudit exposes the audit trail (authenticated).
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	logs, err := s.audit.List(r.Context(), limit)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "failed to load audit log")
+		return
+	}
+	WriteList(w, logs, len(logs))
 }
 
 // handleEvents streams all server events as Server-Sent Events.

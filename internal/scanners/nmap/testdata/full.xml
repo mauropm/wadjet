@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet href="file:///opt/homebrew/share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- nmap 7.993 scan fixture: mixed hosts, services, OS, NSE scripts, down host -->
+<nmaprun scanner="nmap" args="nmap -oX - -sV --top-ports 1000 -T3 --reason 10.0.0.0/29" start="1763500000" startstr="Tue Nov 18 10:06:40 2026" version="7.993" xmloutputversion="1.06">
+  <scaninfo type="connect" protocol="tcp" numservices="1000" services="7,9,13,21,22,23,25,26,37,100"/>
+  <verbose level="0"/>
+  <debugging level="0"/>
+  <host starttime="1763500001" endtime="1763500012">
+    <status state="up" reason="arp-response" reason_ttl="0"/>
+    <address addr="10.0.0.5" addrtype="ipv4"/>
+    <address addr="00:1A:2B:3C:4D:5E" addrtype="mac" vendor="Hewlett Packard"/>
+    <hostnames>
+      <hostname name="web01.lab.example.com" type="PTR"/>
+    </hostnames>
+    <ports>
+      <port protocol="tcp" portid="22">
+        <state state="open" reason="syn-ack" reason_ttl="64"/>
+        <service name="ssh" product="OpenSSH" version="8.9p1 Ubuntu 3ubuntu0.6" extrainfo="Ubuntu Linux; protocol 2.0" method="probed" conf="10"/>
+        <script id="ssh-hostkey" output="&#10;  2048 rsa SHA256:kf8Qv0Yc1zWp (RSA)&#10;  256 ecdsa-sha2-nistp256 SHA256:9dJ2 (ECDSA)&#10;  256 ssh-ed25519 SHA256:1pT0 (ED25519)&#10;"/>
+      </port>
+      <port protocol="tcp" portid="443">
+        <state state="open" reason="syn-ack" reason_ttl="64"/>
+        <service name="http" product="nginx" version="1.18.0" extrainfo="" method="probed" conf="10"/>
+        <script id="http-title" output="&#10;  Site title: Lab Portal"/>
+        <script id="http-server-header" output="&#10;  nginx/1.18.0 (Ubuntu)"/>
+        <script id="ssl-enum-ciphers" output="&#10;  SSLv3: &#10;    ciphers: &#10;      TLS_RSA_WITH_RC4_128_MD5 (rsa_2048, rc4, md5, 128)&#10;  TLSv1.0: &#10;    ciphers: &#10;      TLS_RSA_WITH_RC4_128_SHA (rsa_2048, rc4, 128)&#10;      TLS_RSA_WITH_3DES_EDE_CBC_SHA (rsa_2048, 3des, cbc, 112)&#10;    compressors: &#10;      NULL &#10;    prefer-server: false&#10;  TLSv1.2: &#10;    ciphers: &#10;      TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 (rsa_2048, ecdh_256, aes-128-gcm, 128)&#10;  Least strength: 112 bits"/>
+      </port>
+      <port protocol="tcp" portid="8080">
+        <state state="filtered" reason="admin-prohibited" reason_ttl="253"/>
+        <service name="http-proxy" method="table" conf="3"/>
+      </port>
+    </ports>
+    <os>
+      <osmatch name="Linux 5.10 - 5.16" accuracy="97" line="60358"/>
+      <osmatch name="Linux 4.15 - 5.4" accuracy="88" line="58268"/>
+    </os>
+    <times srtt="412" rttvar="233" to="100000"/>
+  </host>
+  <host starttime="1763500001" endtime="1763500002">
+    <status state="down" reason="no-response" reason_ttl="0"/>
+    <address addr="10.0.0.6" addrtype="ipv4"/>
+  </host>
+  <host starttime="1763500001" endtime="1763500015">
+    <status state="up" reason="localhost-response" reason_ttl="0"/>
+    <hostnames>
+      <hostname name="Router-Local" type="user"/>
+    </hostnames>
+    <hostscript>
+      <script id="smb-os-discovery" output="&#10;  OS: Windows Server 2019; Server role: workgroup"/>
+    </hostscript>
+    <times srtt="0" rttvar="0" to="0"/>
+  </host>
+  <runstats>
+    <finished time="1763500016" timestr="Tue Nov 18 10:06:56 2026" elapsed="15.02" summary="Nmap done at Tue Nov 18 10:06:56 2026; 8 IP addresses (3 hosts up) scanned in 15.02 seconds" exit="success"/>
+    <hosts up="3" down="1" skipped="4"/>
+  </runstats>
+</nmaprun>

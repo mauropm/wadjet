@@ -59,6 +59,7 @@ func NewServer(cfg *config.Config, db *database.DB, authService *auth.Service, a
 			r.With(s.AuthMiddleware).Get("/me", s.handleMe)
 		})
 		r.Get("/events", s.handleEvents) // SSE, authenticated
+		r.With(s.AuthMiddleware).Get("/audit", s.handleAudit)
 		r.Group(func(r chi.Router) {
 			r.Use(s.AuthMiddleware)
 			for _, svc := range extra {

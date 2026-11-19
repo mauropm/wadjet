@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- nmap fixture: hosts with vulnerability-indicating NSE output + malformed attributes -->
+<nmaprun scanner="nmap" args="nmap -oX - --script=safe,vuln -T3 192.168.1.10" start="1763501000" startstr="Tue Nov 18 10:23:20 2026" version="7.993" xmloutputversion="1.06">
+  <host starttime="1763501001" endtime="1763501030">
+    <status state="up" reason="syn-ack" reason_ttl="64"/>
+    <address addr="192.168.1.10" addrtype="ipv4"/>
+    <address addr="fe80::250:56ff:fe01:2" addrtype="ipv6"/>
+    <ports>
+      <port protocol="tcp" portid="21">
+        <state state="open" reason="syn-ack" reason_ttl="64"/>
+        <service name="ftp" product="vsftpd" version="2.3.4"/>
+        <script id="ftp-anon" output="&#10;  Anonymous FTP login allowed (FTP code 230)&#10;  total 4&#10;  drwxr-xr-x 2 0 0 4096 Nov 18 2026 pub"/>
+      </port>
+      <port protocol="tcp" portid="53">
+        <state state="open" reason="syn-ack" reason_ttl="64"/>
+        <service name="domain" product="ISC BIND" version="9.11.3"/>
+        <script id="dns-zone-transfer" output="&#10;  ns1.example.com: &#10;    domain example.com&#10;    Zone transferred: 37 records"/>
+      </port>
+      <port protocol="tcp" portid="80">
+        <state state="open" reason="syn-ack" reason_ttl="64"/>
+        <service name="http" product="Apache httpd" version="2.4.49"/>
+        <script id="http-methods" output="&#10;  Supported Methods: GET HEAD POST OPTIONS PUT DELETE TRACE"/>
+        <script id="http-vuln-cve2021-41773" output="&#10;  Path: /icons/.%2e/%2e%2e/%2e%2e/etc/passwd&#10;  State: VULNERABLE&#10;  Description: A path traversal flaw in Apache 2.4.49 (CVE-2021-41773)"/>
+      </port>
+      <port protocol="tcp" portid="443">
+        <state state="open" reason="syn-ack" reason_ttl="64"/>
+        <service name="https"/>
+        <script id="sslv2" output="&#10;  SSLv2: &#10;    SSLv2 supported: &#10;      ciphers: &#10;        SSL2_RC4_128_WITH_MD5"/>
+      </port>
+      <port protocol="tcp" portid="999999">
+        <state state="open" reason="bogus"/>
+        <service name="junk"/>
+      </port>
+      <port protocol="tcp" portid="notanumber">
+        <state state="open"/>
+      </port>
+    </ports>
+    <os>
+      <osmatch name="Linux 4.4" accuracy="not-a-number" line="1"/>
+      <osmatch name="Linux 4.4 real" accuracy="91" line="2"/>
+    </os>
+    <hostscript>
+      <script id="firewalk-enum" output="This script output matches no curated rule and must stay informational."/>
+    </hostscript>
+    <times srtt="300" rttvar="100" to="100000"/>
+  </host>
+  <host starttime="1763501001" endtime="1763501002">
+    <status state="up" reason="syn-ack" reason_ttl="64"/>
+    <address addr="192.168.1.11" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80">
+        <state state="open" reason="syn-ack" reason_ttl="64"/>
+        <service name="http"/>
+        <script id="http-vuln-cve2017-5638" output="&#10;  State: SAFE&#10;  Research: https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2017-5638"/>
+      </port>
+    </ports>
+    <times srtt="300" rttvar="100" to="100000"/>
+  </host>
+  <runstats>
+    <finished time="1763501031" elapsed="31.00" summary="done" exit="success"/>
+    <hosts up="2" down="0" skipped="0"/>
+  </runstats>
+</nmaprun>

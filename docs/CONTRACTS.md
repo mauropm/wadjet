@@ -88,6 +88,21 @@ GET /reports/{id}/download
 SSE events (Agent 2 defines payload, Lead's bus relays): topics `scan.status`,
 `scan.progress`, `execution.status`.
 
+### SSE wire contract (binding)
+
+Clients subscribe `GET /api/v1/events` (EventSource, cookie or Bearer).
+`event:` field = topic; `data:` = JSON payload:
+
+```
+topic scan  kind scan.status    {session_id, status, error?}
+topic scan  kind scan.progress  {session_id, assets_processed, findings_created, findings_updated}
+topic scan  kind execution.status {session_id, execution_id, scanner, status,
+                                   assets_observed, findings_found, error?}
+topic report kind report.status {report_id, project_id, status, file_size}
+```
+
+Frontend reconnects with exponential backoff; server keeps 25s heartbeat.
+
 ## 5. Auth & middleware
 
 `auth.Service` in `internal/auth`. Token arrives as `Authorization: Bearer <t>`
