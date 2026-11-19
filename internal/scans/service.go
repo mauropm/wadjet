@@ -19,6 +19,8 @@ import (
 	"github.com/mauropm/wadjet/internal/database"
 	"github.com/mauropm/wadjet/internal/events"
 	"github.com/mauropm/wadjet/internal/models"
+	"github.com/mauropm/wadjet/internal/scanners"
+	"github.com/mauropm/wadjet/internal/scanners/manifest"
 )
 
 // Registry is the scanner-registry surface consumed by this service.
@@ -29,6 +31,10 @@ type Registry interface {
 	Disable(ctx context.Context, name string) error
 	CheckAvailability(ctx context.Context, name string) (models.ScannerRecord, error)
 	Enabled(name string) bool
+	// Manifest exposes the scanner's manifest so scan creation can
+	// validate configuration up front (DEF-2) instead of failing the
+	// execution asynchronously.
+	Manifest(name string) (*manifest.Manifest, bool)
 }
 
 // Orchestrator is the execution surface consumed by this service.
@@ -349,13 +355,29 @@ func (s *Service) createScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Every scanner must be registered and enabled at creation time.
+	// Every scanner must be registered and enabled at creation time, and
+	// its configuration must satisfy the manifest schema (DEF-2: refuse
+	// unknown keys and out-of-allowlist values with 422 up front rather
+	// than discovering them when the doomed execution fails asynchronously).
 	names := make([]string, 0, len(bindings))
 	for _, b := range bindings {
 		if !s.reg.Enabled(b.scanner) {
 			api.WriteError(w, http.StatusUnprocessableEntity,
 				fmt.Sprintf("scanner %q is not registered and enabled", b.scanner))
 			return
+		}
+		if m, ok := s.reg.Manifest(b.scanner); ok && len(b.config) > 0 {
+			var cfg scanners.ScannerConfig
+			if err := json.Unmarshal(b.config, &cfg); err != nil {
+				api.WriteError(w, http.StatusUnprocessableEntity,
+					fmt.Sprintf("scanner %q: invalid config JSON: %v", b.scanner, err))
+				return
+			}
+			if err := manifest.ValidateConfig(m.Configuration.Options, cfg); err != nil {
+				api.WriteError(w, http.StatusUnprocessableEntity,
+					fmt.Sprintf("scanner %q: %v", b.scanner, err))
+				return
+			}
 		}
 		names = append(names, b.scanner)
 	}

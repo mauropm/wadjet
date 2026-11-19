@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -52,5 +54,50 @@ func DecodeJSON(r *http.Request, dst any) error {
 	}
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
-	return dec.Decode(dst)
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	// DEF-1: JSON-escaped "\u0000" survives the raw-byte check above and
+	// decodes into Go strings as a real NUL, which PostgreSQL rejects deep
+	// in the stack as an opaque 500 (same class as VER-003). Walk the
+	// decoded value and fail the request at the edge with a clear 400.
+	if decodedHasNUL(reflect.ValueOf(dst)) {
+		return errors.New("body must not contain NUL characters")
+	}
+	return nil
+}
+
+// decodedHasNUL recursively inspects decoded JSON values (structs, maps,
+// slices, pointers, interfaces) for strings carrying a NUL byte.
+func decodedHasNUL(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.String:
+		return strings.IndexByte(v.String(), 0) >= 0
+	case reflect.Pointer, reflect.Interface:
+		return !v.IsNil() && decodedHasNUL(v.Elem())
+	case reflect.Slice, reflect.Array:
+		// Byte slices are raw JSON payloads (json.RawMessage), whose NULs
+		// would themselves be escape sequences validated when decoded.
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return false
+		}
+		for i := 0; i < v.Len(); i++ {
+			if decodedHasNUL(v.Index(i)) {
+				return true
+			}
+		}
+	case reflect.Map:
+		for _, k := range v.MapKeys() {
+			if decodedHasNUL(k) || decodedHasNUL(v.MapIndex(k)) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if decodedHasNUL(v.Field(i)) {
+				return true
+			}
+		}
+	}
+	return false
 }

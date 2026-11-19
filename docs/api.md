@@ -20,7 +20,7 @@ Machine-readable spec: [`openapi.yaml`](../openapi.yaml).
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/auth/login` | `{email, password}` → `{user, token}`; sets cookie |
-| POST | `/auth/register` | self-service account (password ≥ 10 chars) |
+| POST | `/auth/register` | account creation (password ≥ 10 chars). Open only while no users exist (bootstrap); afterwards requires an authenticated **admin** caller (403 otherwise) |
 | POST | `/auth/logout` | revokes session token |
 | GET | `/auth/me` | current user |
 
@@ -69,7 +69,7 @@ Scanner-discovered assets arrive automatically during ingest with
 |---|---|---|
 | GET | `/scanners` | registry entries incl. parsed manifest |
 | GET | `/scanners/{id}` | by id or name |
-| PUT | `/scanners/{id}/enabled` | enable/disable |
+| PUT | `/scanners/{id}/enabled` | enable/disable (admin) |
 | POST | `/scanners/{id}/check` | re-run `executable --version` health probe |
 
 ## Scan profiles
@@ -95,8 +95,8 @@ completed_with_errors | failed | cancelled`.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/events` | global stream (`event:` = topic, `data:` = JSON) |
-| GET | `/scans/{id}/events` | session-filtered stream |
+| GET | `/events` | global stream (`event:` = topic, `data:` = JSON). Authenticated |
+| GET | `/scans/{id}/events` | session-filtered stream. Authenticated |
 
 Event kinds: `scan.status` `{session_id, status, error?}`,
 `scan.progress` `{session_id, assets_processed, findings_created,
@@ -133,7 +133,7 @@ an audit note.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/audit?limit=` | append-only action trail (authenticated) |
+| GET | `/audit?limit=` | append-only action trail (authenticated, **admin** only) |
 
 ## Health
 

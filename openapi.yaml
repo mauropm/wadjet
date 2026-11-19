@@ -22,8 +22,8 @@ paths:
   /auth/register:
     post:
       security: []
-      summary: Register a user (password ≥ 10 chars)
-      responses: { "201": { description: created }, "409": { $ref: "#/components/responses/Error" } }
+      summary: Register a user (password ≥ 10 chars). Open only while no users exist (bootstrap); once any account exists the caller must be an authenticated admin.
+      responses: { "201": { description: created }, "403": { description: registration closed — admin caller required }, "409": { $ref: "#/components/responses/Error" } }
   /auth/logout:
     post: { summary: Revoke current session, clears cookie, responses: { "200": { description: ok } } }
   /auth/me:
@@ -89,7 +89,9 @@ paths:
     get: { responses: { "200": { description: ScannerRecord } } }
   /scanners/{id}/enabled:
     parameters: [ { $ref: "#/components/parameters/Id" } ]
-    put: { responses: { "200": { description: ScannerRecord } } }
+    put:
+      summary: Enable/disable a scanner (admin role required)
+      responses: { "200": { description: ScannerRecord }, "403": { description: administrator role required } }
   /scanners/{id}/check:
     parameters: [ { $ref: "#/components/parameters/Id" } ]
     post: { responses: { "200": { description: ScannerRecord after version probe } } }

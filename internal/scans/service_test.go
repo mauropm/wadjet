@@ -22,6 +22,7 @@ import (
 	"github.com/mauropm/wadjet/internal/database"
 	"github.com/mauropm/wadjet/internal/events"
 	"github.com/mauropm/wadjet/internal/models"
+	"github.com/mauropm/wadjet/internal/scanners/manifest"
 )
 
 const testDatabaseURL = "postgres://wadjet:wadjet@127.0.0.1:5432/wadjet"
@@ -54,12 +55,33 @@ type fakeRegistry struct {
 	mu        sync.Mutex
 	enabled   map[string]bool
 	records   map[string]models.ScannerRecord
+	manifests map[string]*manifest.Manifest
 	disabledN int
 	enabledN  int
 }
 
+// Manifest implements Registry.Manifest (DEF-2 config validation at create).
+func (r *fakeRegistry) Manifest(name string) (*manifest.Manifest, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	m, ok := r.manifests[name]
+	return m, ok
+}
+
+// attachManifest gives a fake scanner a config schema for validation tests.
+func (r *fakeRegistry) attachManifest(name string, opts ...manifest.OptionSpec) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.manifests == nil {
+		r.manifests = map[string]*manifest.Manifest{}
+	}
+	r.manifests[name] = &manifest.Manifest{Name: name, Adapter: "command",
+		Configuration: manifest.Configuration{Timeout: 60, Options: opts}}
+}
+
 func newFakeRegistry(names ...string) *fakeRegistry {
-	r := &fakeRegistry{enabled: map[string]bool{}, records: map[string]models.ScannerRecord{}}
+	r := &fakeRegistry{enabled: map[string]bool{}, records: map[string]models.ScannerRecord{},
+		manifests: map[string]*manifest.Manifest{}}
 	for _, n := range names {
 		r.enabled[n] = true
 		r.records[n] = models.ScannerRecord{ID: uuid.New(), Name: n, DisplayName: n, Adapter: "command", Enabled: true, Status: "available"}
@@ -696,6 +718,38 @@ func TestSSEStreamFiltersSession(t *testing.T) {
 	assert.Contains(t, body, "event: scan")
 	assert.Contains(t, body, created.ID.String())
 	assert.NotContains(t, body, "no-such")
+}
+
+// TestCreateScanRejectsInvalidConfig covers DEF-2: scanner configuration is
+// validated against the manifest schema at creation (422), not discovered
+// only when the doomed execution fails asynchronously.
+func TestCreateScanRejectsInvalidConfig(t *testing.T) {
+	svc, db, reg, _, _ := newTestService(t)
+	reg.attachManifest("alpha",
+		manifest.OptionSpec{ID: "categories", Type: manifest.OptionMultiselect,
+			Options: []string{"safe", "vuln"}},
+		manifest.OptionSpec{ID: "ports", Type: manifest.OptionString},
+	)
+	projectID := mkProjectRow(t, db)
+	srv := mount(t, svc, db)
+	defer srv.Close()
+
+	create := func(cfg map[string]any) int {
+		resp := doJSON(t, http.MethodPost, srv.URL+"/projects/"+projectID.String()+"/scans", map[string]any{
+			"targets":         []string{"127.0.0.1"},
+			"scanner_configs": []any{map[string]any{"scanner": "alpha", "config": cfg}},
+		})
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	assert.Equal(t, http.StatusUnprocessableEntity, create(map[string]any{"categories": []string{"brute"}}),
+		"category outside the manifest allowlist must be refused at creation")
+	assert.Equal(t, http.StatusUnprocessableEntity, create(map[string]any{"bogus_key": "x"}),
+		"undeclared option must be refused at creation")
+	assert.Equal(t, http.StatusUnprocessableEntity, create(map[string]any{"ports": 80}),
+		"wrong type for declared option must be refused at creation")
+	assert.Equal(t, http.StatusCreated, create(map[string]any{"categories": []string{"safe"}, "ports": "80,443"}),
+		"valid config must be accepted")
 }
 
 func TestDecodeBodyLimit(t *testing.T) {
