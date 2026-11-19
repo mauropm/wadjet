@@ -63,20 +63,43 @@ docker compose up -d            # WADJET + Postgres (creates wadjet-lab if absen
 docker compose -f demo/docker-compose.yml up -d   # the lab itself
 ```
 
-Then log in (default `admin@wadjet.local` / `admin`), open the
+Then log in (default `admin@wadjet.local` / `wadjet-admin` — override via
+`WADJET_ADMIN_EMAIL` / `WADJET_ADMIN_PASSWORD`), open the
 *🧪 WADJET Demo Lab* project, start a scan with the **Standard Assessment**
 profile against the seeded targets, and download the report when the session
 completes.
 
 ### Option B — from a throwaway nmap container (quick manual verification)
 
+The lab network is `internal: true`: lab containers have **no internet
+egress**, so `apk add` inside them may fail. Build a local nmap probe image
+once (the build runs on the normal bridge network, which has egress):
+
 ```bash
-docker run --rm -it --network wadjet-lab alpine/nmap \
-  -sV -sC --version-intensity 5 172.30.0.0/24
+mkdir -p /tmp/nmapimg
+printf 'FROM alpine:3.20\nRUN apk add --no-cache nmap nmap-nse nmap-nselibs\nENTRYPOINT ["nmap"]\n' \
+  > /tmp/nmapimg/Dockerfile
+docker build -t wadjet/nmap-probe /tmp/nmapimg
 ```
 
-(Use the service names too — Docker's DNS resolves them on that network:
-`nmap juice-shop tls-test sshd -p 2222`.)
+Then scan (start the lab first so the network exists; containers are
+addressable by their **container names**):
+
+```bash
+docker compose -f demo/docker-compose.yml up -d
+docker run --rm -it --network wadjet-lab wadjet/nmap-probe -Pn -sT -sV \
+  --script=safe \
+  wadjet-lab-juice-shop wadjet-lab-webgoat wadjet-lab-http-banner \
+  wadjet-lab-tls-test wadjet-lab-sshd wadjet-lab-noisy \
+  -p 22,80,443,2222,3000,8080,8000-8005
+```
+
+Notes:
+* Use the `wadjet-lab-*` container names above — Docker's embedded DNS
+  resolves those reliably on the lab network.
+* `-Pn` is recommended: the lab is ping-restricted by design.
+* Plain `alpine/nmap` images often lack the NSE libraries (`nse_main.lua`);
+  the `nmap-nse` + `nmap-nselibs` packages are required for script scans.
 
 ## 4. What NSE will find (talking points)
 
