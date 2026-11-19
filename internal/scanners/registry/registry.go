@@ -257,7 +257,16 @@ func (r *Registry) setEnabled(ctx context.Context, name string, enabled bool) er
 	if !ok {
 		return fmt.Errorf("registry: scanner %q not registered", name)
 	}
-	tag, err := r.db.Exec(ctx, `UPDATE scanners SET enabled = $2, updated_at = now() WHERE name = $1`, name, enabled)
+	tag, err := r.db.Exec(ctx, `
+		UPDATE scanners
+		SET enabled = $2,
+		    status = CASE
+		        WHEN NOT $2 THEN 'disabled'
+		        WHEN status = 'disabled' THEN 'unknown'
+		        ELSE status
+		    END,
+		    updated_at = now()
+		WHERE name = $1`, name, enabled)
 	if err != nil {
 		return fmt.Errorf("registry: persist enabled for %s: %w", name, err)
 	}

@@ -1,6 +1,7 @@
 package nmap
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -14,19 +15,16 @@ import (
 
 func nmapManifest(t *testing.T) *manifest.Manifest {
 	t.Helper()
-	m := &manifest.Manifest{
-		Name:        "nmap",
-		DisplayName: "Nmap",
-		Executable:  "nmap",
-		Adapter:     manifest.AdapterCommand,
-		Enabled:     true,
-		AssetTypes:  []string{"ip", "ipv6", "hostname", "domain"},
-		Capabilities: []string{"host_discovery", "port_discovery"},
-		Output:      manifest.OutputSpec{Format: manifest.FormatXML, Parser: ParserKey},
-		Configuration: manifest.Configuration{Timeout: 600},
+	// Exercise the real bundled manifest end to end.
+	mfs, err := manifest.LoadDir(filepath.Join("..", "..", "..", "configs", "scanners"))
+	require.NoError(t, err)
+	for _, m := range mfs {
+		if m.Name == "nmap" {
+			return m
+		}
 	}
-	require.NoError(t, m.Validate())
-	return m
+	t.Fatal("bundled nmap manifest not found")
+	return nil
 }
 
 func req(targets []string, cfg scanners.ScannerConfig) scanners.ScanRequest {
@@ -43,8 +41,8 @@ func TestBuildArgsTable(t *testing.T) {
 	tests := []struct {
 		name     string
 		config   scanners.ScannerConfig
-		wantArgs []string   // must all appear
-		deny     []string   // must NOT appear
+		wantArgs []string // must all appear
+		deny     []string // must NOT appear
 		wantErr  string
 	}{
 		{

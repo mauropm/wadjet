@@ -102,14 +102,14 @@ func TestPDFTextIsLayoutSafe(t *testing.T) {
 func TestSlugify(t *testing.T) {
 	cases := map[string]string{
 		"🧪 WADJET Demo Lab": "wadjet-demo-lab",
-		"My App!!!":          "my-app",
-		"  ":                 "project",
-		"!!!???":             "project",
-		"CamelCase Name":     "camelcase-name",
-		"trailing-":          "trailing",
-		"multi   space":      "multi-space",
-		"slashes/\\back":     "slashes-back",
-		"héllo wörld":        "hello-world",
+		"My App!!!":         "my-app",
+		"  ":                "project",
+		"!!!???":            "project",
+		"CamelCase Name":    "camelcase-name",
+		"trailing-":         "trailing",
+		"multi   space":     "multi-space",
+		"slashes/\\back":    "slashes-back",
+		"héllo wörld":       "hello-world",
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, slugify(in), "slugify(%q)", in)

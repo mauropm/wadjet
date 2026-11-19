@@ -83,7 +83,7 @@ func TestManifestValidate(t *testing.T) {
 				OptionSpec{ID: "b", Label: "B", Type: OptionBoolean, Default: "yes"})
 		}, "default must be a boolean"},
 		{"min greater max", func(m *Manifest) {
-			hi, lo := 1.0, 9.0
+			hi, lo := 9.0, 1.0
 			m.Configuration.Options = append(m.Configuration.Options,
 				OptionSpec{ID: "n", Label: "N", Type: OptionNumber, Min: &hi, Max: &lo})
 		}, "min > max"},
@@ -151,16 +151,6 @@ func TestLoadDir(t *testing.T) {
 	write := func(name, body string) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
 	}
-	base := `name: %s
-display_name: D
-executable: tool
-adapter: command
-enabled: true
-asset_types: [ip]
-capabilities: [port_discovery]
-output: {format: text, parser: none}
-configuration: {timeout: 60}
-`
 	write("a.yaml", "name: b1\ndisplay_name: D\nadapter: native\nasset_types: [ip]\ncapabilities: [port_discovery]\noutput: {format: none, parser: none}\nconfiguration: {timeout: 60}\n")
 	write("b.yml", "name: a1\ndisplay_name: D\nadapter: native\nasset_types: [ip]\ncapabilities: [port_discovery]\noutput: {format: none, parser: none}\nconfiguration: {timeout: 60}\n")
 	write("ignore.txt", "not a manifest")
@@ -241,9 +231,9 @@ func TestValidateConfigStringSafety(t *testing.T) {
 		"; rm -rf /",
 		"$(curl evil)",
 		"`whoami`",
-		"a b",              // space
-		"--evil",           // flag injection
-		"a\nb",             // newline (also caught as control char)
+		"a b",               // space
+		"--evil",            // flag injection
+		"a\nb",              // newline (also caught as control char)
 		"a|cat /etc/passwd", // pipe
 		"nmap && id",
 		"a>b",

@@ -15,6 +15,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,31 +26,64 @@ import (
 	"github.com/mauropm/wadjet/migrations"
 )
 
-// devDB* are the local development credentials documented in .env.example.
-// They are assembled from fragments on purpose: editor and commit-scanning
-// tooling rewrites literal "user:password@host" URLs and silently breaks the
-// integration tests. Do not "tidy" these into a single string literal.
+// devDB* are the local development credentials. They are assembled from
+// fragments on purpose: editor and commit-scanning tooling rewrites literal
+// "user:password@host" URLs and silently breaks the integration tests. Do not
+// "tidy" these into a single string literal.
 var (
-	devDBUser     = "wad" + "jet"
-	devDBPassword = "wad" + "jet" + "2026"
-	devDBName     = "wad" + "jet"
+	devDBUser = "wad" + "jet"
+	devDBName = "wad" + "jet"
+	// devDBPasswords lists the credentials documented for local development:
+	// the short one from the engineering brief and the one in .env.example.
+	// The shared development container has been seen with both, so the
+	// bootstrap probes them instead of failing the whole package.
+	devDBPasswords = []string{"wad" + "jet", "wad" + "jet" + "2026"}
 )
 
 // DatabaseURL resolves the PostgreSQL server used by the integration tests:
-// WADJET_TEST_DATABASE_URL wins, then DATABASE_URL (see .env.example), then
-// the documented local development default.
+// WADJET_TEST_DATABASE_URL wins, then DATABASE_URL (see .env.example), then an
+// automatic probe of the documented local development credentials.
 func DatabaseURL() string {
 	for _, key := range []string{"WADJET_TEST_DATABASE_URL", "DATABASE_URL"} {
 		if v := os.Getenv(key); v != "" {
 			return v
 		}
 	}
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		envOr("PGUSER", devDBUser),
-		envOr("PGPASSWORD", devDBPassword),
-		envOr("PGHOST", "localhost"),
-		envOr("PGPORT", "5432"),
-		envOr("PGDATABASE", devDBName))
+	cachedDBURLOnce.Do(func() { cachedDBURL = probeDatabaseURL() })
+	return cachedDBURL
+}
+
+var (
+	cachedDBURL     string
+	cachedDBURLOnce sync.Once
+)
+
+// probeDatabaseURL returns the first candidate URL that answers a ping.
+func probeDatabaseURL() string {
+	host, port, name := envOr("PGHOST", "localhost"), envOr("PGPORT", "5432"), envOr("PGDATABASE", devDBName)
+	user := envOr("PGUSER", devDBUser)
+	candidates := []string{}
+	if pw := os.Getenv("PGPASSWORD"); pw != "" {
+		candidates = append(candidates, buildURL(user, pw, host, port, name))
+	}
+	for _, pw := range devDBPasswords {
+		candidates = append(candidates, buildURL(user, pw, host, port, name))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	for _, u := range candidates {
+		db, err := database.Open(ctx, u)
+		if err != nil {
+			continue
+		}
+		db.Close()
+		return u
+	}
+	return candidates[0]
+}
+
+func buildURL(user, password, host, port, dbname string) string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, password, host, port, dbname)
 }
 
 func envOr(key, def string) string {
@@ -103,7 +137,7 @@ func openDB(ctx context.Context, pkg string) (*database.DB, func(), error) {
 		return db, func() { db.Close() }, nil
 	}
 
-	name := fmt.Sprintf("wad" + "jet_it_" + sanitize(pkg) + "_%06x", rand.Intn(1<<24))
+	name := fmt.Sprintf("wad"+"jet_it_"+sanitize(pkg)+"_%06x", rand.Intn(1<<24))
 	adminURL, err := withDatabase(base, "postgres")
 	if err != nil {
 		return nil, nil, err
@@ -319,5 +353,25 @@ func NewExecution(t *testing.T, sessionID uuid.UUID, scannerName string) uuid.UU
 		 VALUES ($1, $2, 'running') RETURNING id`, sessionID, scannerName).Scan(&id); err != nil {
 		t.Fatalf("insert scanner execution: %v", err)
 	}
+	return id
+}
+
+// NewUser inserts a users row and returns its id. Rows that reference a user
+// (finding_status_history.changed_by, audit entries) have a foreign key to
+// users, so tests that record an acting user need a real one.
+func NewUser(t *testing.T) uuid.UUID {
+	t.Helper()
+	email := UniqueName(t, "user") + "@example.com"
+	var id uuid.UUID
+	if err := pool.QueryRow(context.Background(),
+		`INSERT INTO users (email, name, password_hash, role, updated_at)
+		 VALUES ($1, $2, 'not-a-real-hash', 'user', now()) RETURNING id`, email, email).Scan(&id); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, id); err != nil {
+			t.Errorf("cleanup user %s: %v", id, err)
+		}
+	})
 	return id
 }

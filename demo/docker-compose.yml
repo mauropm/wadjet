@@ -1,0 +1,171 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# WADJET demonstration lab — deliberately vulnerable services.
+#
+#   docker compose -f demo/docker-compose.yml up -d
+#
+# SECURITY NOTICE
+# ───────────────
+# * Everything here is INTENTIONALLY INSECURE (Juice Shop, WebGoat, weak SSH
+#   banner, deprecated-TLS-ready nginx). It runs on the PRIVATE, INTERNAL
+#   network `wadjet-lab` with `internal: true`: the containers have NO
+#   route to the host network and NO route to the internet.
+# * NO vulnerable service publishes a host port. The only way to reach them
+#   is from a container joined to `wadjet-lab`:
+#     - the WADJET app container (root docker-compose.yml joins it), or
+#     - a throwaway nmap container:
+#         docker run --rm -it --network wadjet-lab alpine/nmap -sn 172.30.0.0/24
+#       (full commands in demo/README.md)
+# * Do NOT flip `internal: false` or add `ports:` mappings on this network
+#   unless you fully understand the exposure. The Juice Shop and WebGoat
+#   images contain working exploits on purpose.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: wadjet-lab
+
+services:
+  juice-shop:
+    image: bkimminich/juice-shop:latest
+    container_name: wadjet-lab-juice-shop
+    networks: [wadjet-lab]
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      # Node is guaranteed present in the Juice Shop image; wget/curl are not.
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 10s
+      start_period: 60s
+      retries: 10
+    restart: unless-stopped
+
+  webgoat:
+    image: webgoat/webgoat:latest
+    container_name: wadjet-lab-webgoat
+    networks: [wadjet-lab]
+    environment:
+      - WEBGOAT_PORT=8080
+    healthcheck:
+      # Best-effort: try wget, then bash /dev/tcp (image tooling varies).
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:8080/webgoat/ 2>/dev/null || bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080' 2>/dev/null"]
+      interval: 20s
+      timeout: 10s
+      start_period: 120s
+      retries: 30
+    restart: unless-stopped
+
+  # Plain nginx with a banner-rich response: version disclosure, custom
+  # Server header, extra X-* headers — prime NSE (http-headers, http-server-header)
+  # material.
+  http-banner:
+    image: nginx:1.27-alpine
+    container_name: wadjet-lab-http-banner
+    networks: [wadjet-lab]
+    volumes:
+      - ./nginx/http-banner.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # TLS endpoint with a self-signed certificate. The served config accepts
+  # TLS 1.0/1.1/1.2/1.3 and weak ciphers on purpose (see tls-test.conf).
+  tls-test:
+    image: nginx:1.27-alpine
+    container_name: wadjet-lab-tls-test
+    networks: [wadjet-lab]
+    volumes:
+      - ./nginx/tls-test.conf:/etc/nginx/conf.d/default.conf:ro
+      - tls-certs:/etc/nginx/certs
+    # Generate a self-signed cert on first start, then serve normally.
+    command:
+      - sh
+      - -c
+      - |
+        if [ ! -f /etc/nginx/certs/server.key ]; then
+          apk add --no-cache --virtual .certgen openssl >/dev/null 2>&1 || true
+          mkdir -p /etc/nginx/certs
+          if command -v openssl >/dev/null 2>&1; then
+            openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+              -keyout /etc/nginx/certs/server.key \
+              -out /etc/nginx/certs/server.crt \
+              -subj "/C=US/ST=Lab/L=Lab/O=WADJET Demo/CN=tls.lab" 2>/dev/null
+          fi
+          apk del .certgen >/dev/null 2>&1 || true
+        fi
+        # nginx:alpine ships an openssl-capable busybox; the cert files are
+        # what matter. If openssl was unavailable the image's fallback below
+        # still starts nginx (TLS listener will fail until certs exist).
+        exec nginx -g 'daemon off;'
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null --no-check-certificate https://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 8
+    restart: unless-stopped
+
+  # Weak-ish, clearly identifiable SSH endpoint: custom banner advertises an
+  # old OpenSSH-looking string, password auth enabled with a lab user.
+  sshd:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: wadjet-lab-sshd
+    networks: [wadjet-lab]
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=022
+      - SUDO_ACCESS=false
+      - PASSWORD_ACCESS=true
+      - USER_NAME=lab
+      - USER_PASSWORD=labpassword    # weak on purpose — demo lab only
+    volumes:
+      - ./ssh/banner.txt:/config/sshd-banner.txt:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 2222 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    restart: unless-stopped
+
+  # "Noisy" multi-service container: six socat listeners (8000-8005) with
+  # chatty banners so port sweeps always have something to find.
+  noisy:
+    image: alpine/socat:latest
+    container_name: wadjet-lab-noisy
+    networks: [wadjet-lab]
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        i=0
+        for p in 8000 8001 8002 8003 8004 8005; do
+          i=$$((i+1))
+          socat TCP-LISTEN:$$p,fork,reuseaddr SYSTEM:"echo 'WADJET-LAB noisy service $$p v1.3.37-alpha'; echo 'built 2019-04-01 (UNPATCHED)'; echo 'type HELP for commands'; while read -r line; do case \"$$line\" in *HELP*) echo 'no help for you';; *) echo 'echo: $$line';; esac; done" &
+        done
+        wait
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  wadjet-lab:
+    # Same explicit name as the root docker-compose.yml — both stacks join
+    # one isolated lab network. internal: true ⇒ no egress to the internet,
+    # no host exposure. If you need `apk`-style internet access inside a
+    # lab container, attach it to an additional non-internal network instead
+    # of exposing these services.
+    name: wadjet-lab
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  tls-certs:

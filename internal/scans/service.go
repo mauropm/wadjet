@@ -143,6 +143,12 @@ type sessionTarget struct {
 	Error     string    `json:"error"`
 }
 
+// scannerBinding pairs a scanner name with its execution config.
+type scannerBinding struct {
+	scanner string
+	config  json.RawMessage
+}
+
 // scanSessionDetail is the GET /scans/{id} response.
 type scanSessionDetail struct {
 	models.ScanSession
@@ -293,11 +299,7 @@ func (s *Service) createScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type binding struct {
-		scanner string
-		config  json.RawMessage
-	}
-	var bindings []binding
+	var bindings []scannerBinding
 	if req.ProfileID != nil {
 		bindings, err = s.profileBindings(r.Context(), *req.ProfileID, projectID)
 		if err != nil {
@@ -314,7 +316,7 @@ func (s *Service) createScan(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		for _, sc := range req.ScannerConfigs {
-			bindings = append(bindings, binding{sc.Scanner, sc.Config})
+			bindings = append(bindings, scannerBinding{sc.Scanner, sc.Config})
 		}
 	}
 
@@ -554,10 +556,7 @@ func (s *Service) cancelScan(w http.ResponseWriter, r *http.Request) {
 
 // ── profile resolution ──────────────────────────────────────────────────
 
-func (s *Service) profileBindings(ctx context.Context, profileID, projectID uuid.UUID) ([]struct {
-	scanner string
-	config  json.RawMessage
-}, error) {
+func (s *Service) profileBindings(ctx context.Context, profileID, projectID uuid.UUID) ([]scannerBinding, error) {
 	var exists bool
 	if err := s.db.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM scan_profiles WHERE id = $1 AND project_id = $2)`,
@@ -574,15 +573,9 @@ func (s *Service) profileBindings(ctx context.Context, profileID, projectID uuid
 		return nil, fmt.Errorf("cannot load profile scanners: %w", err)
 	}
 	defer rows.Close()
-	var out []struct {
-		scanner string
-		config  json.RawMessage
-	}
+	var out []scannerBinding
 	for rows.Next() {
-		var b struct {
-			scanner string
-			config  json.RawMessage
-		}
+		var b scannerBinding
 		if err := rows.Scan(&b.scanner, &b.config); err != nil {
 			return nil, err
 		}

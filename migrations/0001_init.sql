@@ -242,7 +242,7 @@ CREATE TABLE findings (
     status            text NOT NULL DEFAULT 'open' CHECK (status IN
                         ('open','confirmed','remediated','accepted_risk','false_positive')),
     remediation       text NOT NULL DEFAULT '',
-    references        jsonb NOT NULL DEFAULT '[]'::jsonb,
+    "references"      jsonb NOT NULL DEFAULT '[]'::jsonb,
     fingerprint       text NOT NULL,
     first_detected    timestamptz NOT NULL DEFAULT now(),
     last_detected     timestamptz NOT NULL DEFAULT now(),

@@ -156,14 +156,13 @@ func BuildArgs(m *manifest.Manifest, req scanners.ScanRequest) ([]string, error)
 			}
 			continue
 		}
-		// Embedded placeholders.
+		// Embedded placeholders: only {{workdir}} may appear embedded
+		// (operator-authored path template).
 		if strings.Contains(tpl, "{{") {
-			repl := strings.ReplaceAll(tpl, "{{target}}", "")
-			if strings.Contains(repl, "{{") {
+			expanded := strings.ReplaceAll(tpl, "{{workdir}}", req.WorkDir)
+			if strings.Contains(expanded, "{{") || strings.Contains(expanded, "}}") {
 				return nil, fmt.Errorf("command adapter: invalid placeholder in argument %q", tpl)
 			}
-			// Only {{workdir}} may appear embedded (operator-authored path).
-			expanded := strings.ReplaceAll(tpl, "{{workdir}}", req.WorkDir)
 			if err := validateArgLiteral(expanded); err != nil {
 				return nil, fmt.Errorf("command adapter: argument %q: %w", tpl, err)
 			}

@@ -453,6 +453,9 @@ func (r *Renderer) BarChart(counts map[string]int, total int) {
 			max = c
 		}
 	}
+	if max == 0 {
+		max = 1 // unknown-severity values only; never divide by zero
+	}
 	const labelW, barMax = 30.0, 118.0
 	for _, sev := range severityOrder {
 		n := counts[sev]

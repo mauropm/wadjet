@@ -1,0 +1,11 @@
+*******************************************************************
+*                                                                 *
+*   WADJET LAB - FINANCE ZONE JUMP HOST                           *
+*   Last successful firmware update: 2017-02-11 (v6.2p1)          *
+*   Contact: ops@lab.internal  |  ticket queue: JIRA LAB-*         *
+*                                                                 *
+*   NOTE: shared demo credential lab/labpassword is active for    *
+*   convenience. This banner intentionally advertises an old      *
+*   OpenSSH-style build string so fingerprinting has a target.    *
+*                                                                 *
+*******************************************************************

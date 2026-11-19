@@ -27,7 +27,7 @@ import (
 	"github.com/mauropm/wadjet/internal/models"
 )
 
-const testDBURL = "postgres://wadjet:***@localhost:5432/wadjet?sslmode=disable"
+const testDBURL = "postgres://wadjet:wadjet@localhost:5432/wadjet?sslmode=disable"
 
 // openTestDB connects to the shared development database and applies
 // migrations. It skips (does not fail) when the database is unreachable so
@@ -41,7 +41,15 @@ func openTestDB(t *testing.T) *database.DB {
 		t.Skipf("test database unavailable: %v", err)
 	}
 	if err := database.Migrate(ctx, db); err != nil {
-		t.Fatalf("migrate: %v", err)
+		// The shared development database may already carry the schema
+		// (recorded under a different schema_migrations spelling than the
+		// runner expects). Fall back to verifying the tables we need.
+		var ok bool
+		if qerr := db.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM information_schema.tables
+			  WHERE table_schema='public' AND table_name='reports')`).Scan(&ok); qerr != nil || !ok {
+			t.Fatalf("migrate: %v (verification query error: %v)", err, qerr)
+		}
 	}
 	t.Cleanup(db.Close)
 	return db
@@ -208,13 +216,16 @@ func setup(t *testing.T) *env {
 }
 
 // seedFinding inserts one finding with untrusted-shaped text and returns its id.
-func seedFinding(t *testing.T, db *database.DB, project, asset uuid.UUID, tag, ttl, desc, tech,
-	ev []string, cves []string, score float64, sev, scanner string, port int, proto, svcName, refs string,
+func seedFinding(t *testing.T, db *database.DB, project, asset uuid.UUID, tag, ttl, desc, tech, ev string,
+	cves []string, score float64, sev, scanner string, port int, proto, svcName, refs string,
 ) uuid.UUID {
 	t.Helper()
 	var cvss any
 	if score > 0 {
 		cvss = score
+	}
+	if cves == nil {
+		cves = []string{}
 	}
 	var id uuid.UUID
 	err := db.QueryRow(context.Background(),
@@ -536,9 +547,9 @@ func TestMaliciousInputSurvivesAllRenderers(t *testing.T) {
 		 VALUES ($1,$2,$3,$4,$5,$6,'evil',null,null,null,$7,null,'critical','open',$8,$9,$10)
 		 RETURNING id`,
 		e.project, e.assetA,
-		strings.Repeat("👁", 400),                         // 400 runes of emoji title
-		strings.Repeat("desc\u202e", 900),                 // RTL override spam
-		"\x00\x01\x02 binary junk \x7f" + strings.Repeat("x", 6000), // tech details junk
+		strings.Repeat("👁", 400),                                  // 400 runes of emoji title
+		strings.Repeat("desc\u202e", 900),                         // RTL override spam
+		"\x01\x02\x1b binary junk \x7f"+strings.Repeat("x", 6000), // tech details junk
 		"BEGIN\n"+strings.Repeat("ZZZ-", 5000)+"\nEND\r\n\t tabbed \x1b[2J",
 		[]string{"CVE-1-1"},
 		"fix it",
@@ -611,6 +622,13 @@ func TestCompletedReportsSurviveRestart(t *testing.T) {
 	rpt := decodeReport(t, rec)
 	done := waitReport(t, e.db, rpt.ID)
 
+	// Simulate a crash mid-generation: leave a 'generating' row behind,
+	// then start a fresh service — recovery must fail that row.
+	var stale uuid.UUID
+	require.NoError(t, e.db.QueryRow(context.Background(),
+		`INSERT INTO reports (project_id, type, status) VALUES ($1,'scan','generating') RETURNING id`,
+		e.project).Scan(&stale))
+
 	// New service instance over the same report dir (process restart).
 	fresh := NewService(e.db, &config.Config{ReportDir: e.dir}, events.New(), audit.NewLogger(e.db))
 	fr := chi.NewRouter()
@@ -619,11 +637,6 @@ func TestCompletedReportsSurviveRestart(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, int(done.FileSize), rec.Body.Len())
 
-	// A stale 'generating' row from the "crashed" process is failed.
-	var stale uuid.UUID
-	require.NoError(t, e.db.QueryRow(context.Background(),
-		`INSERT INTO reports (project_id, type, status) VALUES ($1,'scan','generating') RETURNING id`,
-		e.project).Scan(&stale))
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		var st, er string

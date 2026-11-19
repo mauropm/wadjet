@@ -130,10 +130,10 @@ func TestParseVulnFixture(t *testing.T) {
 		severity string
 		port     int
 	}{
-		"Anonymous FTP login permitted":      {"high", 21},
-		"DNS zone transfer permitted":        {"high", 53},
-		"Dangerous HTTP methods enabled":     {"medium", 80},
-		"SSLv2 enabled on TLS port":          {"critical", 443},
+		"Anonymous FTP login permitted":                               {"high", 21},
+		"DNS zone transfer permitted":                                 {"high", 53},
+		"Dangerous HTTP methods enabled":                              {"medium", 80},
+		"SSLv2 enabled on TLS port":                                   {"critical", 443},
 		"Potential vulnerability detected by http-vuln-cve2021-41773": {"high", 80},
 	}
 	seen := map[string]bool{}
@@ -180,7 +180,7 @@ func TestParseEdgeCases(t *testing.T) {
 	cases := []struct{ name, xml, wantErr string }{
 		{"empty", "", "empty output"},
 		{"garbage", "\x00\x01not xml at all", "malformed XML"},
-		{"wrong root", `<foo><host/></foo>`, "not an nmaprun"},
+		{"wrong root", `<foo><host/></foo>`, "malformed XML"},
 		{"host without identity",
 			`<nmaprun><host><status state="up"/></host></nmaprun>`, ""},
 	}

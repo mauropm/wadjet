@@ -1,0 +1,27 @@
+# WADJET scanner manifest — native TCP connect probe (native-adapter example).
+# No external executable: the adapter runs in-process. Registered via the
+# output.parser key "tcp_connect_probe".
+name: nativeprobe
+display_name: Native TCP Probe
+description: In-process TCP connect probe — verifies listener state without external tools
+version: builtin
+adapter: native
+enabled: true
+
+asset_types: [ip, ipv6, hostname]
+capabilities:
+  - host_discovery
+  - port_discovery
+
+output:
+  format: none
+  parser: tcp_connect_probe
+
+configuration:
+  timeout: 300
+  options:
+    - {id: ports, label: "TCP Ports (e.g. 22,80,443,8000-8010)", type: string}
+    - {id: connect_timeout_ms, label: "Connect Timeout (ms)", type: number,
+       default: 2000, min: 100, max: 10000}
+    - {id: concurrency, label: "Probe Concurrency", type: number,
+       default: 64, min: 1, max: 256}

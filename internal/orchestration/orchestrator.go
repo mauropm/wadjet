@@ -186,14 +186,14 @@ func (o *Orchestrator) runSession(sessionID, projectID uuid.UUID, rawTargets []s
 	}
 
 	// ── 2. executions ───────────────────────────────────────────────────
-	execs, err := o.loadOrPrepareExecutions(ctx, sessionID, projectID, approvedRaw)
-	if err != nil {
-		o.finishSession(sessionID, started, models.ScanStatusFailed, err.Error())
-		return
-	}
 	if len(execTargets) == 0 {
 		o.finishSession(sessionID, started, models.ScanStatusFailed,
 			"no targets remained after allowlist validation and normalization")
+		return
+	}
+	execs, err := o.loadOrPrepareExecutions(ctx, sessionID, projectID, approvedRaw)
+	if err != nil {
+		o.finishSession(sessionID, started, models.ScanStatusFailed, err.Error())
 		return
 	}
 	if len(execs) == 0 {
@@ -335,7 +335,11 @@ func (o *Orchestrator) runExecution(sessionCtx context.Context, sessionID, proje
 		if errors.Is(execCtx.Err(), context.Canceled) && sessionCtx.Err() != nil {
 			status = models.ExecStatusCancelled
 		}
-		msg := truncate(runErr.Error(), 4096)
+		msg := runErr.Error()
+		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+			msg = fmt.Sprintf("timed out after %s: %s", timeout, msg)
+		}
+		msg = truncate(msg, 4096)
 		o.persistExecutionTerminal(ex.ID, status, "", 0, 0, 0, msg, "")
 		o.publish(KindExecutionStatus, ExecutionStatusEvent{
 			SessionID: sessionID, ExecutionID: ex.ID, Scanner: ex.ScannerName,
@@ -498,6 +502,9 @@ func (o *Orchestrator) loadOrPrepareExecutions(ctx context.Context, sessionID, p
 		`SELECT profile_id, scanner_names FROM scan_sessions WHERE id = $1`, sessionID,
 	).Scan(&profileID, &scannerNames); err != nil {
 		return nil, fmt.Errorf("orchestration: load session snapshot: %w", err)
+	}
+	if approvedRaw == nil {
+		approvedRaw = []string{}
 	}
 
 	for _, name := range scannerNames {

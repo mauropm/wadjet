@@ -32,7 +32,7 @@ func Load() *Config {
 	c := &Config{
 		Port:            env("WADJET_PORT", "8080"),
 		Env:             env("WADJET_ENV", "development"),
-		DatabaseURL:     env("DATABASE_URL", "postgres://wadjet:***@localhost:5432/wadjet?sslmode=disable"),
+		DatabaseURL:     env("DATABASE_URL", "postgres://wadjet:***@127.0.0.1:5432/wadjet?sslmode=disable"),
 		SessionSecret:   env("WADJET_SESSION_SECRET", "dev-se…e-me"),
 		AdminEmail:      env("WADJET_ADMIN_EMAIL", "admin@wadjet.local"),
 		AdminPassword:   env("WADJET_ADMIN_PASSWORD", "admin"),

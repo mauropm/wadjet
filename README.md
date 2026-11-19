@@ -40,7 +40,7 @@ npm run dev                   # http://localhost:5173 (proxies /api → :8080)
 ```
 
 Default credentials (bootstrap admin, override via `.env`):
-`admin@wadjet.local` / `admin`
+`admin@wadjet.local` / `wadjet-admin`
 
 ### Demonstration lab
 

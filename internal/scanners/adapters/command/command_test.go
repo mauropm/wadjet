@@ -22,17 +22,17 @@ func timeoutAfter() <-chan time.Time { return time.After(15 * time.Second) }
 func testManifest(t *testing.T) *manifest.Manifest {
 	t.Helper()
 	m := &manifest.Manifest{
-		Name:        "echotool",
-		DisplayName: "Echo Tool",
-		Description: "test",
-		Executable:  "/bin/echo",
-		Adapter:     manifest.AdapterCommand,
-		Enabled:     true,
-		AssetTypes:  []string{"ip", "hostname"},
-		Capabilities: []string{"port_discovery"},
-		Output:      manifest.OutputSpec{Format: manifest.FormatText, Parser: "none"},
+		Name:          "echotool",
+		DisplayName:   "Echo Tool",
+		Description:   "test",
+		Executable:    "/bin/echo",
+		Adapter:       manifest.AdapterCommand,
+		Enabled:       true,
+		AssetTypes:    []string{"ip", "hostname"},
+		Capabilities:  []string{"port_discovery"},
+		Output:        manifest.OutputSpec{Format: manifest.FormatText, Parser: "none"},
 		Configuration: manifest.Configuration{Timeout: 30},
-		Arguments:   []string{"-n", "scan", "{{workdir}}/out.txt", "{{target}}"},
+		Arguments:     []string{"-n", "scan", "{{workdir}}/out.txt", "{{target}}"},
 	}
 	require.NoError(t, m.Validate())
 	return m

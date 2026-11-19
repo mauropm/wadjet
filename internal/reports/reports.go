@@ -684,7 +684,8 @@ func (s *Service) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	if st, err := f.Stat(); err != nil || st.IsDir() {
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
 		api.WriteError(w, http.StatusNotFound, "report file not found")
 		return
 	}
@@ -695,7 +696,7 @@ func (s *Service) handleDownload(w http.ResponseWriter, r *http.Request) {
 	name := fileSafe(filepath.Base(rpt.FilePath))
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", rpt.FileSize))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", st.Size()))
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, f)
 	s.audit.LogRequest(r, s.userID(r), "report.download", "report", rpt.ID.String(),

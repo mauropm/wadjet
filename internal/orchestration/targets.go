@@ -70,7 +70,10 @@ func (n *TargetNormalizer) Normalize(ctx context.Context, projectID uuid.UUID, r
 			return res
 		}
 		res.ExecTargets = []scanners.Target{t}
-		n.resolveInto(ctx, &res, []string{t.Raw})
+		// Best-effort resolution for auditability; a URL target whose host
+		// does not currently resolve stays valid (web scanners may still
+		// probe it, and DNS may recover).
+		n.bestEffortResolveInto(ctx, &res, []string{urlHostname(raw)})
 		return res
 
 	case strings.Contains(raw, "/"):
@@ -123,6 +126,23 @@ func (n *TargetNormalizer) resolveInto(ctx context.Context, res *NormalizedTarge
 	}
 }
 
+// bestEffortResolveInto records resolved IPs without failing the target.
+func (n *TargetNormalizer) bestEffortResolveInto(ctx context.Context, res *NormalizedTarget, hosts []string) {
+	mark := *res
+	n.resolveInto(ctx, &mark, hosts)
+	if mark.Err == "" {
+		res.ResolvedIPs = mark.ResolvedIPs
+	}
+}
+
+func urlHostname(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return u.Hostname()
+}
+
 func classifyURL(projectID uuid.UUID, raw string) (scanners.Target, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" {
@@ -164,7 +184,7 @@ func classifyHost(projectID uuid.UUID, raw string) (scanners.Target, error) {
 }
 
 func hostOnly(s string) string {
-	if i := strings.LastIndex(s, ":"); i > 0 && !strings.Contains(s[i:], ":") {
+	if i := strings.LastIndex(s, ":"); i > 0 && !strings.Contains(s[i+1:], ":") {
 		// single colon: strip :port (never present for bare IPv6, which has many)
 		return s[:i]
 	}

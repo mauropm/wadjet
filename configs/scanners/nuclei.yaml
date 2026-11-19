@@ -1,0 +1,37 @@
+# WADJET scanner manifest — Nuclei (declarative command-adapter example).
+# Demonstrates onboarding an arbitrary external tool purely via YAML:
+# fixed `arguments` template with {{target}}/{{workdir}} placeholders, no
+# custom Go code. Ships disabled because the binary is not installed.
+name: nuclei
+display_name: Nuclei
+description: Template-based vulnerability scanner (install the nuclei binary, then enable)
+version: auto
+executable: nuclei
+adapter: command
+enabled: false
+
+asset_types: [url, hostname, domain, ip]
+capabilities:
+  - vulnerability_detection
+  - web_discovery
+
+# Raw JSONL output is archived for now; a structured parser can be added by
+# registering a factory for a new output.parser key.
+output:
+  format: json
+  parser: none
+  extension: jsonl
+
+documentation: https://projectdiscovery.io/nuclei
+
+configuration:
+  timeout: 900
+  env_allowlist: [NUCLEI_CONFIG_DIR]
+  options: []
+
+arguments:
+  - -silent
+  - -jsonl
+  - -no-color
+  - -target
+  - "{{target}}"

@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# WADJET — application stack.
+#
+#   docker compose up          # starts WADJET + PostgreSQL, nothing else needed
+#   open http://localhost:8080 (API under /api/v1, health at /healthz)
+#
+# Environment defaults mirror .env.example; override via a local `.env`.
+#
+# The optional `wadjet-lab` network is shared with demo/docker-compose.yml
+# (same explicit name) so the WADJET container can scan the vulnerable lab
+# lab-to-lab without anything being published to the host.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: wadjet
+
+services:
+  wadjet:
+    build: .
+    image: wadjet:local
+    ports:
+      - "8080:8080"
+    environment:
+      WADJET_ENV: ${WADJET_ENV:-development}
+      WADJET_PORT: "8080"
+      DATABASE_URL: postgres://wadjet:wadjet@postgres:5432/wadjet?sslmode=disable
+      WADJET_SESSION_SECRET: ${WADJET_SESSION_SECRET:-dev-se…e-me}
+      WADJET_ADMIN_EMAIL: ${WADJET_ADMIN_EMAIL:-admin@wadjet.local}
+      # ≥8 chars: auth.EnsureAdmin rejects the shorter .env.example default.
+      WADJET_ADMIN_PASSWORD: ${WADJET_ADMIN_PASSWORD:-wadjet-admin}
+      WADJET_REPORT_DIR: /app/data/reports
+      WADJET_RAW_OUTPUT_DIR: /app/data/raw
+      WADJET_SCAN_WORKDIR: /app/data/scanwork
+      WADJET_SCANNER_CONFIG_DIR: /app/configs/scanners
+      WADJET_SCAN_CONCURRENCY: ${WADJET_SCAN_CONCURRENCY:-4}
+      WADJET_SCAN_TIMEOUT: ${WADJET_SCAN_TIMEOUT:-1800}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - default
+      - wadjet-lab
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wadjet
+      POSTGRES_PASSWORD: wadjet
+      POSTGRES_DB: wadjet
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/init-migrations:ro
+    # TRANSITIONAL bootstrapping hook: applies migrations/0001_init.sql on
+    # first init with `references` quoted (a reserved word; see Lead's file
+    # + CONTRACTS.md §2) and records the version so the app's embedded
+    # migration runner skips it. Once 0001_init.sql is fixed upstream this
+    # sed is a no-op. Only runs on an empty pgdata volume.
+    command:
+      - sh
+      - -c
+      - |
+        cat > /docker-entrypoint-initdb.d/50-wadjet-schema.sh <<'EOS'
+        set -e
+        sed 's/^\( *\)references\( *\)/\1"references"\2/' /init-migrations/0001_init.sql > /tmp/0001-fixed.sql
+        psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -f /tmp/0001-fixed.sql
+        psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c \
+          "CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now()); INSERT INTO schema_migrations(version) VALUES ('0001_init.sql') ON CONFLICT DO NOTHING;"
+        EOS
+        exec docker-entrypoint.sh postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wadjet -d wadjet"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # No host port: the database is reachable only from the compose network.
+    networks:
+      - default
+    restart: unless-stopped
+
+networks:
+  wadjet-lab:
+    # Explicit shared name so demo/docker-compose.yml joins the same network.
+    name: wadjet-lab
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  pgdata:

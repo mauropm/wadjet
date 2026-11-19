@@ -48,10 +48,10 @@ const (
 // nameRe accepts lowercase slug names (manifest names, option ids).
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
-// executableRe accepts a bare program name or a path. Deliberately excludes
-// every shell metacharacter: ; | & $ ` ( ) < > ' " \ space, tab, newline,
-// glob characters and braces.
-var executableRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+@-]*$`)
+// executableRe accepts a bare program name or an absolute/relative-free
+// path. Deliberately excludes every shell metacharacter: ; | & $ ` ( ) < >
+// ' " \ space, tab, newline, glob characters and braces.
+var executableRe = regexp.MustCompile(`^/?[A-Za-z0-9][A-Za-z0-9._/+@-]*$`)
 
 // hostnameLike asset types accepted from manifests. These mirror the
 // Target.Type vocabulary in internal/scanners/scanner.go.
@@ -96,63 +96,63 @@ var allowedFormats = map[string]bool{
 
 // OutputSpec describes the scanner's native output.
 type OutputSpec struct {
-	Format string `yaml:"format"`
-	Parser string `yaml:"parser"`
+	Format string `yaml:"format" json:"format"`
+	Parser string `yaml:"parser" json:"parser"`
 	// Extension is the file extension used when persisting raw output.
 	// Defaults are derived from Format when empty.
-	Extension string `yaml:"extension"`
+	Extension string `yaml:"extension" json:"extension"`
 }
 
 // OptionSpec declares one user-settable scanner option.
 type OptionSpec struct {
-	ID      string   `yaml:"id"`
-	Label   string   `yaml:"label"`
-	Type    string   `yaml:"type"`
-	Default any      `yaml:"default"`
-	Options []string `yaml:"options"`
-	Min     *float64 `yaml:"min"`
-	Max     *float64 `yaml:"max"`
+	ID      string   `yaml:"id" json:"id"`
+	Label   string   `yaml:"label" json:"label"`
+	Type    string   `yaml:"type" json:"type"`
+	Default any      `yaml:"default" json:"default"`
+	Options []string `yaml:"options" json:"options"`
+	Min     *float64 `yaml:"min" json:"min"`
+	Max     *float64 `yaml:"max" json:"max"`
 }
 
 // Configuration holds scanner runtime configuration declared by the manifest.
 type Configuration struct {
 	// Timeout is the default per-execution timeout in seconds. Must be > 0.
-	Timeout int `yaml:"timeout"`
+	Timeout int `yaml:"timeout" json:"timeout"`
 	// AcceptableExitCodes lists additional process exit codes that mean
 	// "success" for this scanner (exit 0 is always acceptable).
-	AcceptableExitCodes []int `yaml:"acceptable_exit_codes"`
+	AcceptableExitCodes []int `yaml:"acceptable_exit_codes" json:"acceptable_exit_codes"`
 	// EnvAllowlist lists environment variable names passed through to the
 	// scanner process. The process otherwise receives a minimal environment.
-	EnvAllowlist []string     `yaml:"env_allowlist"`
-	Options      []OptionSpec `yaml:"options"`
+	EnvAllowlist []string     `yaml:"env_allowlist" json:"env_allowlist"`
+	Options      []OptionSpec `yaml:"options" json:"options"`
 }
 
 // Manifest is the parsed, validated description of one scanner integration.
 type Manifest struct {
-	Name         string   `yaml:"name"`
-	DisplayName  string   `yaml:"display_name"`
-	Description  string   `yaml:"description"`
-	Version      string   `yaml:"version"`
-	Executable   string   `yaml:"executable"`
-	Adapter      string   `yaml:"adapter"`
-	Enabled      bool     `yaml:"enabled"`
-	AssetTypes   []string `yaml:"asset_types"`
-	Capabilities []string `yaml:"capabilities"`
+	Name         string   `yaml:"name" json:"name"`
+	DisplayName  string   `yaml:"display_name" json:"display_name"`
+	Description  string   `yaml:"description" json:"description"`
+	Version      string   `yaml:"version" json:"version"`
+	Executable   string   `yaml:"executable" json:"executable"`
+	Adapter      string   `yaml:"adapter" json:"adapter"`
+	Enabled      bool     `yaml:"enabled" json:"enabled"`
+	AssetTypes   []string `yaml:"asset_types" json:"asset_types"`
+	Capabilities []string `yaml:"capabilities" json:"capabilities"`
 
-	Output        OutputSpec    `yaml:"output"`
-	Configuration Configuration `yaml:"configuration"`
+	Output        OutputSpec    `yaml:"output" json:"output"`
+	Configuration Configuration `yaml:"configuration" json:"configuration"`
 
 	// Arguments is the fixed, operator-authored argument template used by
 	// the generic command adapter. Placeholders {{target}} and {{workdir}}
 	// are substituted as whole argv elements; user configuration values are
 	// never interpolated into arguments.
-	Arguments []string `yaml:"arguments"`
+	Arguments []string `yaml:"arguments" json:"arguments"`
 
 	// Documentation is an optional URL or notes shown in the UI.
-	Documentation string `yaml:"documentation"`
+	Documentation string `yaml:"documentation" json:"documentation"`
 
 	// SourceFile records where the manifest was loaded from (not serialized).
-	SourceFile string `yaml:"-"`
+	SourceFile string `yaml:"-" json:"-"`
 }
 
 // DefaultExtension returns the file extension for raw output files.

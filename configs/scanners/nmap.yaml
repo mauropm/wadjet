@@ -1,0 +1,57 @@
+# WADJET scanner manifest — Nmap.
+# Field semantics: docs/scanner-development.md
+name: nmap
+display_name: Nmap
+description: Network discovery and vulnerability assessment
+version: auto
+executable: nmap
+adapter: command
+enabled: true
+
+asset_types: [ip, ipv6, hostname, domain]
+capabilities:
+  - host_discovery
+  - port_discovery
+  - service_detection
+  - os_detection
+  - vulnerability_detection
+
+output:
+  format: xml
+  parser: nmap_xml
+  extension: xml
+
+documentation: https://nmap.org/book/man.html
+
+configuration:
+  timeout: 1800
+  # nmap exits 2 on some host errors; output is still usable.
+  acceptable_exit_codes: [2]
+  env_allowlist: [NMAPDIR]
+  options:
+    - {id: scan_intensity, label: "Scan Intensity", type: select, default: top1000,
+       options: [ping_only, top1000, common, full]}
+    - {id: ports, label: "Custom Port List (e.g. 22,80,443,8000-8100)", type: string}
+    - {id: service_detection, label: "Service & Version Detection (-sV)", type: boolean, default: true}
+    - {id: os_detection, label: "OS Detection (-O, requires root)", type: boolean, default: false}
+    - {id: scripts, label: "Default NSE Scripts (-sC)", type: boolean, default: true}
+    - {id: script_categories, label: "NSE Script Categories", type: multiselect,
+       options: [default, safe, vuln, discovery, auth, version, broadcast, brute, external]}
+    - {id: custom_scripts, label: "Individual NSE Scripts", type: multiselect,
+       options: [banner, clock-skew, dns-zone-transfer, ftp-anon, ftp-syst,
+                 http-headers, http-methods, http-robots-txt, http-server-header,
+                 http-sql-injection, http-stored-xss, http-title, http-traceroute,
+                 http-userdir-enum, http-vuln-cve2017-5638, http-vuln-cve2021-41773,
+                 https-redirect, iscsi-targets, nbstat, ntp-info, p0f-fingerprint,
+                 smb-os-discovery, smb-protocols, smb-security-mode, snmp-info,
+                 snmp-sysdescr, ssh-hostkey, ssh-kex-weak-algos, ssh2-enum-algos,
+                 ssl-date, ssl-enum-ciphers, ssl-known-key, sslv2, sslv2-drown,
+                 telnet-echo, tls-nextprotoneg, tls-info, vhosts, xmpp-info]}
+    - {id: timing, label: "Timing Template", type: select, default: normal,
+       options: [slow, normal, fast]}
+    - {id: host_timeout, label: "Per-host Timeout (e.g. 300s, 5m)", type: string}
+    - {id: max_parallelism, label: "Max Parallelism", type: number, default: 20,
+       min: 1, max: 128}
+    - {id: reason, label: "Report Port State Reasons", type: boolean, default: true}
+    - {id: reverse_dns, label: "Reverse DNS Resolution", type: boolean, default: true}
+    - {id: skip_ping, label: "Skip Host Discovery (-Pn)", type: boolean, default: false}
