@@ -108,9 +108,9 @@ paths:
     parameters: [ { $ref: "#/components/parameters/Id" } ]
     get: { responses: { "200": { description: list of ScanSession } } }
     post:
-      summary: Create scan session (targets validated against project allowlist)
+      summary: Create scan session (targets validated against the project allowlist; scanner config against the manifest schema)
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [targets], properties: { name: { type: string }, targets: { type: array, items: { type: string } }, scanner_configs: { type: array, items: { type: object, properties: { scanner: { type: string }, config: { type: object } } } }, profile_id: { type: string, format: uuid } } } } } }
-      responses: { "201": { description: ScanSession }, "400": { $ref: "#/components/responses/Error" } }
+      responses: { "201": { description: ScanSession }, "400": { $ref: "#/components/responses/Error" }, "422": { description: unauthorized target, unknown/disabled scanner, or invalid scanner configuration } }
   /scans/{id}:
     parameters: [ { $ref: "#/components/parameters/Id" } ]
     get: { responses: { "200": { description: ScanSession with executions } } }
@@ -158,12 +158,12 @@ paths:
     parameters: [ { $ref: "#/components/parameters/Id" } ]
     post:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [session_id], properties: { session_id: { type: string, format: uuid } } } } } }
-      responses: { "201": { description: queued Report } }
+      responses: { "201": { description: queued Report }, "503": { description: report generation queue saturated, retry later } }
   /projects/{id}/reports/findings:
     parameters: [ { $ref: "#/components/parameters/Id" } ]
     post:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [consolidated], properties: { consolidated: { type: boolean }, severity: { type: array, items: { type: string } }, asset_id: { type: string, format: uuid }, session_id: { type: string, format: uuid } } } } } }
-      responses: { "201": { description: queued Report (PDF or ZIP) } }
+      responses: { "201": { description: queued Report (PDF or ZIP) }, "503": { description: report generation queue saturated, retry later } }
   /reports:
     get:
       parameters:
