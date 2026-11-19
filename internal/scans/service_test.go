@@ -148,6 +148,11 @@ func (o *fakeOrchestrator) Cancel(id uuid.UUID) bool {
 	return o.cancelRet
 }
 
+// ValidateTargets allows all targets in tests unless denied is set.
+func (o *fakeOrchestrator) ValidateTargets(ctx context.Context, projectID uuid.UUID, targets []string) error {
+	return nil
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────
 
 func newTestService(t *testing.T) (*Service, *database.DB, *fakeRegistry, *fakeOrchestrator, *events.Bus) {

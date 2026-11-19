@@ -404,14 +404,8 @@ func (s *Service) verifyChain(ctx context.Context, r models.Report) error {
 // Register mounts the report endpoints. r is already mounted under /api/v1
 // behind authentication (CONTRACTS.md §2).
 func (s *Service) Register(r chi.Router) {
-	r.Route("/projects", func(r chi.Router) {
-		r.Route("/{id}", func(r chi.Router) {
-			r.Route("/reports", func(r chi.Router) {
-				r.Post("/scan", s.handleCreateScanReport)
-				r.Post("/findings", s.handleCreateFindingsReport)
-			})
-		})
-	})
+	r.Post("/projects/{id}/reports/scan", s.handleCreateScanReport)
+	r.Post("/projects/{id}/reports/findings", s.handleCreateFindingsReport)
 	r.Post("/findings/{id}/report", s.handleCreateFindingReport)
 	r.Get("/reports", s.handleListReports)
 	r.Get("/reports/{id}", s.handleGetReport)

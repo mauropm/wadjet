@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -601,4 +603,245 @@ func mustGet(t *testing.T, s *Service, id uuid.UUID) *models.Finding {
 func observationCount(t *testing.T, findingID uuid.UUID) int {
 	t.Helper()
 	return itest.Count(t, `SELECT count(*) FROM finding_observations WHERE finding_id = $1`, findingID)
+}
+
+// TestIngestConcurrentSameFinding exercises the path the orchestrator actually
+// takes: several scanner executions of one session reporting the same issue at
+// the same time. The unique key (project_id, asset_id, fingerprint) must
+// converge them onto one finding row, each detection must still leave its own
+// observation, and exactly one of the racing transactions may count it as a
+// creation.
+func TestIngestConcurrentSameFinding(t *testing.T) {
+	ctx := context.Background()
+	s := newFindingService(t)
+	project := itest.NewProject(t, "")
+	session := itest.NewScanSession(t, project)
+
+	const racers = 5
+	sessions := make([]scanners.ScanResult, racers)
+	for i := range sessions {
+		sessions[i] = scanners.ScanResult{
+			Assets:   []scanners.AssetObservationData{assetObs("10.0.0.60")},
+			Findings: []scanners.FindingResult{finding("10.0.0.60", "Race condition", 80, "tcp")},
+		}
+	}
+	execs := make([]uuid.UUID, racers)
+	for i := range execs {
+		execs[i] = itest.NewExecution(t, session, "nmap")
+	}
+
+	start := make(chan struct{})
+	errs := make([]error, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // release them together, maximising the overlap
+			errs[i] = s.Ingest(ctx, session, execs[i], "nmap", &sessions[i])
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("racer %d: %v", i, err)
+		}
+	}
+
+	if n := itest.Count(t, `SELECT count(*) FROM findings WHERE project_id = $1`, project); n != 1 {
+		t.Fatalf("findings = %d, want exactly 1 after %d concurrent ingests", n, racers)
+	}
+	f := mustFind(t, s, project, "Race condition")
+	if got := observationCount(t, f.ID); got != racers {
+		t.Fatalf("observations = %d, want %d (one per detection)", got, racers)
+	}
+	// Exactly one transaction saw a creation; the rest saw an update.
+	var created, updated, processed int
+	if err := itest.DB().QueryRow(ctx,
+		`SELECT findings_created, findings_updated, assets_processed FROM scan_sessions WHERE id = $1`, session).
+		Scan(&created, &updated, &processed); err != nil {
+		t.Fatalf("counters: %v", err)
+	}
+	if created != 1 {
+		t.Fatalf("findings_created = %d, want exactly 1", created)
+	}
+	if updated != racers-1 {
+		t.Fatalf("findings_updated = %d, want %d", updated, racers-1)
+	}
+	if processed != racers {
+		t.Fatalf("assets_processed = %d, want %d", processed, racers)
+	}
+	// Every racing execution kept its own counters.
+	var execTotal int
+	if err := itest.DB().QueryRow(ctx,
+		`SELECT coalesce(sum(findings_found),0) FROM scanner_executions WHERE session_id = $1`, session).
+		Scan(&execTotal); err != nil {
+		t.Fatalf("execution counters: %v", err)
+	}
+	if execTotal != racers {
+		t.Fatalf("sum(findings_found) = %d, want %d", execTotal, racers)
+	}
+}
+
+// TestIngestConcurrentDistinctFindingsOnSameAsset checks the same path when the
+// racers report different issues on one asset: all of them must survive, and
+// the shared asset row must be refreshed rather than duplicated.
+func TestIngestConcurrentDistinctFindingsOnSameAsset(t *testing.T) {
+	ctx := context.Background()
+	s := newFindingService(t)
+	project := itest.NewProject(t, "")
+	session := itest.NewScanSession(t, project)
+
+	const racers = 4
+	execs := make([]uuid.UUID, racers)
+	results := make([]scanners.ScanResult, racers)
+	for i := 0; i < racers; i++ {
+		execs[i] = itest.NewExecution(t, session, "nmap")
+		results[i] = scanners.ScanResult{
+			Assets:   []scanners.AssetObservationData{assetObs("10.0.0.61")},
+			Findings: []scanners.FindingResult{finding("10.0.0.61", fmt.Sprintf("Issue %d", i), 443, "tcp")},
+		}
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, racers)
+	start := make(chan struct{})
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs[i] = s.Ingest(ctx, session, execs[i], "nmap", &results[i])
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("racer %d: %v", i, err)
+		}
+	}
+	if n := itest.Count(t, `SELECT count(*) FROM findings WHERE project_id = $1`, project); n != racers {
+		t.Fatalf("findings = %d, want %d", n, racers)
+	}
+	if n := itest.Count(t, `SELECT count(*) FROM assets WHERE project_id = $1`, project); n != 1 {
+		t.Fatalf("assets = %d, want 1 shared asset", n)
+	}
+	var created int
+	if err := itest.DB().QueryRow(ctx,
+		`SELECT findings_created FROM scan_sessions WHERE id = $1`, session).Scan(&created); err != nil {
+		t.Fatalf("counters: %v", err)
+	}
+	if created != racers {
+		t.Fatalf("findings_created = %d, want %d", created, racers)
+	}
+}
+
+// TestIngestRetryIsIdempotent pins the ResultSink requirement that
+// implementations must be idempotent: when the orchestrator retries an
+// execution and replays the same result, the inventory must not grow a second
+// copy of the evidence. The execution's own observation rows are replaced, the
+// finding row is the same one, and another execution's history is untouched.
+func TestIngestRetryIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	s := newFindingService(t)
+	project := itest.NewProject(t, "")
+	session := itest.NewScanSession(t, project)
+	execA := itest.NewExecution(t, session, "nmap")
+	execB := itest.NewExecution(t, session, "nmap")
+
+	result := &scanners.ScanResult{
+		Assets:   []scanners.AssetObservationData{assetObs("10.0.0.70")},
+		Findings: []scanners.FindingResult{finding("10.0.0.70", "Stale evidence", 80, "tcp")},
+	}
+	if err := s.Ingest(ctx, session, execA, "nmap", result); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	f := mustFind(t, s, project, "Stale evidence")
+
+	// A different execution reporting the same issue legitimately adds its own
+	// observation: two runs are two detection events.
+	if err := s.Ingest(ctx, session, execB, "nmap", result); err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	if n := observationCount(t, f.ID); n != 2 {
+		t.Fatalf("observations = %d, want 2 (one per execution)", n)
+	}
+
+	// Replaying execution A must not duplicate anything.
+	retry := &scanners.ScanResult{
+		Assets:   []scanners.AssetObservationData{assetObs("10.0.0.70")},
+		Findings: []scanners.FindingResult{finding("10.0.0.70", "Stale evidence", 80, "tcp")},
+	}
+	retry.Findings[0].Evidence = scanners.FindingEvidence{Snippet: "evidence-v2"}
+	if err := s.Ingest(ctx, session, execA, "nmap", retry); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+
+	if n := itest.Count(t, `SELECT count(*) FROM findings WHERE project_id = $1`, project); n != 1 {
+		t.Fatalf("findings = %d, want 1", n)
+	}
+	if n := itest.Count(t, `SELECT count(*) FROM assets WHERE project_id = $1`, project); n != 1 {
+		t.Fatalf("assets = %d, want 1", n)
+	}
+	if n := observationCount(t, f.ID); n != 2 {
+		t.Fatalf("observations after replay = %d, want 2 (the replay replaced its own rows)", n)
+	}
+	// The replayed execution carries the newest evidence; the other execution
+	// keeps what it originally reported.
+	type row struct {
+		exec uuid.UUID
+		raw  []byte
+	}
+	rows := []row{}
+	q, err := itest.DB().Query(ctx,
+		`SELECT scanner_execution_id, raw FROM finding_observations WHERE finding_id = $1`, f.ID)
+	if err != nil {
+		t.Fatalf("read observations: %v", err)
+	}
+	for q.Next() {
+		var r row
+		if err := q.Scan(&r.exec, &r.raw); err != nil {
+			t.Fatalf("scan observation: %v", err)
+		}
+		rows = append(rows, r)
+	}
+	q.Close()
+	if len(rows) != 2 {
+		t.Fatalf("read %d observations", len(rows))
+	}
+	for _, r := range rows {
+		switch r.exec {
+		case execA:
+			if !strings.Contains(string(r.raw), "evidence-v2") {
+				t.Fatalf("replayed execution kept stale evidence: %s", r.raw)
+			}
+		case execB:
+			if !strings.Contains(string(r.raw), "evidence-v1") {
+				t.Fatalf("another execution's evidence was rewritten: %s", r.raw)
+			}
+		default:
+			t.Fatalf("observation from an unknown execution %s", r.exec)
+		}
+	}
+	// Asset history behaves the same way: one observation per execution.
+	if n := itest.Count(t, `SELECT count(*) FROM asset_observations WHERE scanner_execution_id = $1`, execA); n != 1 {
+		t.Fatalf("asset observations for the replayed execution = %d, want 1", n)
+	}
+	if n := itest.Count(t, `SELECT count(*) FROM asset_observations WHERE scanner_execution_id = $2
+		AND asset_id = (SELECT id FROM assets WHERE project_id = $1 AND identity = '10.0.0.70')`,
+		project, execB); n != 1 {
+		t.Fatalf("asset observations for the other execution = %d, want 1", n)
+	}
+	// Execution counters are assigned from this call's totals, so a replay
+	// restates them instead of adding to them.
+	var execAssets, execFindings int
+	if err := itest.DB().QueryRow(ctx,
+		`SELECT assets_observed, findings_found FROM scanner_executions WHERE id = $1`, execA).
+		Scan(&execAssets, &execFindings); err != nil {
+		t.Fatalf("execution counters: %v", err)
+	}
+	if execAssets != 1 || execFindings != 1 {
+		t.Fatalf("replayed execution counters = %d/%d, want 1/1", execAssets, execFindings)
+	}
 }

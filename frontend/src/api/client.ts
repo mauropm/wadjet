@@ -163,8 +163,21 @@ export const projectsApi = {
     put<Project>(`/projects/${id}`, cleanBody(input)),
   remove: (id: string) => del<void>(`/projects/${id}`),
   archive: (id: string) => post<Project>(`/projects/${id}/archive`),
-  clone: (id: string, input: CloneInput) =>
-    post<Project>(`/projects/${id}/clone`, cleanBody(input)),
+  clone: (id: string, input: CloneInput) => {
+    // Backend contract: {name, description?, copy?: {settings, targets, ...}}
+    const { name, description, ...flat } = input as CloneInput & {
+      description?: string;
+    };
+    const copy = Object.fromEntries(
+      Object.entries(flat)
+        .filter(([k]) => k.startsWith('copy_'))
+        .map(([k, v]) => [k.replace(/^copy_/, ''), v]),
+    );
+    return post<Project>(
+      `/projects/${id}/clone`,
+      cleanBody({ name, description, copy: Object.keys(copy).length ? copy : undefined }),
+    );
+  },
 
   listTargets: (projectId: string) =>
     get<ListResponse<ProjectTarget>>(`/projects/${projectId}/targets`),

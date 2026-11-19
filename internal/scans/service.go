@@ -35,6 +35,8 @@ type Registry interface {
 type Orchestrator interface {
 	StartSession(ctx context.Context, sessionID uuid.UUID) error
 	Cancel(sessionID uuid.UUID) bool
+	// ValidateTargets enforces the project scope allowlist at creation time.
+	ValidateTargets(ctx context.Context, projectID uuid.UUID, targets []string) error
 }
 
 // Service serves the scanners & scans REST surface. It is mounted at
@@ -318,6 +320,13 @@ func (s *Service) createScan(w http.ResponseWriter, r *http.Request) {
 		for _, sc := range req.ScannerConfigs {
 			bindings = append(bindings, scannerBinding{sc.Scanner, sc.Config})
 		}
+	}
+
+	// Defense-in-depth: enforce the project scope allowlist at creation,
+	// not only at execution. Unauthorized or excluded targets are refused.
+	if err := s.orch.ValidateTargets(r.Context(), projectID, req.Targets); err != nil {
+		api.WriteError(w, http.StatusBadRequest, "target not authorized: "+err.Error())
+		return
 	}
 
 	// Every scanner must be registered and enabled at creation time.

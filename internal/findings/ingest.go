@@ -63,7 +63,13 @@ const findingCols = `id, project_id, asset_id, title, description, technical_det
 //  4. Every detection, new or repeated, appends one immutable
 //     finding_observations row holding the complete FindingResult JSON,
 //     evidence included. History is append-only and is the audit trail for
-//     "what did the scanner actually say".
+//     "what did the scanner actually say". The one exception is a replay: when
+//     Ingest is called again for the SAME execution (the orchestrator retrying
+//     a scanner that timed out), the observation rows that execution wrote are
+//     replaced rather than duplicated, which is what makes the ResultSink
+//     contract "implementations must be idempotent" true for the data that
+//     matters. Rows of any other execution are never rewritten, so no
+//     detection event from another run can ever be lost or edited.
 //  5. Content refresh is conservative: evidence and technical details follow
 //     the latest evidence the scanner produced, the first-seen description and
 //     title are kept, missing fields are filled in, and nothing that is known
@@ -92,6 +98,22 @@ func (s *Service) Ingest(ctx context.Context, sessionID, executionID uuid.UUID, 
 	}
 
 	return s.db.InTx(ctx, func(tx pgx.Tx) error {
+		// Idempotent replay. The observations written below describe THIS
+		// execution, so an earlier attempt of the same execution (the
+		// orchestrator retrying a scanner that timed out) must not leave a
+		// second copy behind: its rows are replaced, and only its rows.
+		// Observations of every other execution — every other detection event —
+		// are never modified or removed, so the history stays append-only for
+		// anything that is not a replay of this very call.
+		if executionID != uuid.Nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM finding_observations WHERE scanner_execution_id = $1`, executionID); err != nil {
+				return fmt.Errorf("replace observations of execution %s: %w", executionID, err)
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM asset_observations WHERE scanner_execution_id = $1`, executionID); err != nil {
+				return fmt.Errorf("replace asset observations of execution %s: %w", executionID, err)
+			}
+		}
+
 		assetsProcessed := 0
 		for _, obs := range result.Assets {
 			if _, _, err := s.assets.UpsertFromScanTx(ctx, tx, projectID, sessionID, executionID, scannerName, obs); err != nil {

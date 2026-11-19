@@ -119,6 +119,26 @@ type UpdateInput struct {
 
 // ───────────────────────────────────────────── queries
 
+// View is the JSON representation of a profile. models.ScanProfile marks the
+// scanner list omitempty, which would make a profile without bindings omit the
+// field entirely; the API always exposes "scanners" as a list so a client can
+// render the recipe without a null check. The outer field shadows the promoted
+// one, so the embedded model supplies every other key.
+type View struct {
+	models.ScanProfile
+	Scanners []models.ProfileScanner `json:"scanners"`
+}
+
+func viewOf(p *models.ScanProfile) View {
+	// The assignment must be explicit: within View, the name Scanners resolves
+	// to the outer field, so the embedded model's list is not promoted.
+	v := View{ScanProfile: *p, Scanners: p.Scanners}
+	if v.Scanners == nil {
+		v.Scanners = []models.ProfileScanner{}
+	}
+	return v
+}
+
 // Get loads one profile with its scanner bindings attached.
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*models.ScanProfile, error) {
 	profile, err := scanProfile(s.db.QueryRow(ctx, `SELECT `+profileCols+` FROM scan_profiles WHERE id = $1`, id))
@@ -682,7 +702,11 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	api.WriteList(w, items, total)
+	views := make([]View, 0, len(items))
+	for i := range items {
+		views = append(views, viewOf(&items[i]))
+	}
+	api.WriteList(w, views, total)
 }
 
 func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -705,7 +729,7 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	api.WriteJSON(w, http.StatusCreated, profile)
+	api.WriteJSON(w, http.StatusCreated, viewOf(profile))
 }
 
 func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -718,7 +742,7 @@ func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, profile)
+	api.WriteJSON(w, http.StatusOK, viewOf(profile))
 }
 
 func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
@@ -745,7 +769,7 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	api.WriteJSON(w, http.StatusOK, profile)
+	api.WriteJSON(w, http.StatusOK, viewOf(profile))
 }
 
 func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {

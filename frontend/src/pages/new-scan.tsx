@@ -70,7 +70,7 @@ export default function NewScanWizard() {
         : {
             name,
             targets: chosenTargets,
-            scanners: activeScanners.map(([scanner, v]) => ({ scanner, config: v.config })),
+            scanner_configs: activeScanners.map(([scanner, v]) => ({ scanner, config: v.config })),
           };
       const session = await projectsApi.createScan(id, body);
       try {

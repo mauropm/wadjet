@@ -269,6 +269,18 @@ func (o *Orchestrator) authorize(ctx context.Context, projectID uuid.UUID, targe
 	return o.authorizer.Authorize(ctx, projectID, target)
 }
 
+// ValidateTargets checks every target against the project's authorization
+// allowlist up front (defense-in-depth: the same gate runs again at
+// execution time). It returns the first authorization failure.
+func (o *Orchestrator) ValidateTargets(ctx context.Context, projectID uuid.UUID, targets []string) error {
+	for _, t := range targets {
+		if err := o.authorize(ctx, projectID, t); err != nil {
+			return fmt.Errorf("target %s: %w", t, err)
+		}
+	}
+	return nil
+}
+
 // execution is one scanner_executions row to run.
 func (o *Orchestrator) runExecution(sessionCtx context.Context, sessionID, projectID uuid.UUID,
 	ex models.ScannerExecution, targets []scanners.Target) (status string, assetsObs, findingsFound int, errMsg string) {

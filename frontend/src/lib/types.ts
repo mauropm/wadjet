@@ -273,6 +273,7 @@ export interface ProjectUpdateInput {
 
 export interface CloneInput {
   name?: string;
+  description?: string;
   copy_settings?: boolean;
   copy_targets?: boolean;
   copy_scanner_configs?: boolean;
