@@ -727,7 +727,17 @@ func (s *Service) streamEvents(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 			_, _ = w.Write([]byte(": ping\n\n"))
 			flusher.Flush()
-		case ev := <-ch:
+		case ev, ok := <-ch:
+			if !ok {
+				// The bus closed this channel — either a slow-consumer
+				// eviction (SEC-012) or an over-capacity handout. Receiving
+				// from a closed channel always succeeds, so without this
+				// exit the loop would spin at 100% CPU until the client
+				// (possibly the very stalled attacker that triggered the
+				// eviction) chose to disconnect. End the stream; the SSE
+				// client sees EOF and reconnects.
+				return
+			}
 			if !eventBelongsToSession(ev, idStr) {
 				continue
 			}

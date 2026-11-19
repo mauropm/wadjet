@@ -115,6 +115,17 @@ func (o *Orchestrator) StartSession(ctx context.Context, sessionID uuid.UUID) er
 		rawTargets  []string
 		scannerName string
 	)
+	// SECURITY/CORRECTNESS (NEW-4): the cancel func is registered BEFORE
+	// the queued→running claim. Registering it inside the goroutine left a
+	// window where POST /cancel found no cancel func, force-cancelled the
+	// DB rows, and the never-cancelled goroutine later resurrected them as
+	// completed — executing scan traffic for a session the operator
+	// cancelled. Claiming first, then registering, is also wrong for the
+	// same reason; registering first is race-free because Cancel only ever
+	// affects sessions this process owns.
+	runCtx, runCancel := context.WithCancel(context.Background())
+	o.registerCancel(sessionID, runCancel)
+
 	err := o.db.QueryRow(ctx, `
 		UPDATE scan_sessions
 		SET status = 'running', started_at = COALESCE(started_at, now()), updated_at = now()
@@ -122,16 +133,20 @@ func (o *Orchestrator) StartSession(ctx context.Context, sessionID uuid.UUID) er
 		RETURNING project_id, targets, COALESCE(name,'')`, sessionID,
 	).Scan(&projectID, &rawTargets, &scannerName)
 	if errors.Is(err, pgx.ErrNoRows) {
+		o.unregisterCancel(sessionID)
+		runCancel()
 		return fmt.Errorf("orchestration: session %s is not queued (already started, cancelled or missing)", sessionID)
 	}
 	if err != nil {
+		o.unregisterCancel(sessionID)
+		runCancel()
 		return fmt.Errorf("orchestration: start session: %w", err)
 	}
 
 	o.publish(KindScanStatus, ScanStatusEvent{SessionID: sessionID, Status: models.ScanStatusRunning})
 
 	o.wg.Add(1)
-	go o.runSession(sessionID, projectID, rawTargets)
+	go o.runSession(runCtx, sessionID, projectID, rawTargets)
 	return nil
 }
 
@@ -166,13 +181,27 @@ func (o *Orchestrator) unregisterCancel(sessionID uuid.UUID) {
 
 // runSession is the async driver: never panics, never aborts sibling
 // executions, always keeps already-collected results.
-func (o *Orchestrator) runSession(sessionID, projectID uuid.UUID, rawTargets []string) {
+func (o *Orchestrator) runSession(ctx context.Context, sessionID, projectID uuid.UUID, rawTargets []string) {
 	defer o.wg.Done()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	o.registerCancel(sessionID, cancel)
 	defer o.unregisterCancel(sessionID)
+
+	// Cancelled during the claim→dispatch window: materialize the execution
+	// rows (so the session always has an auditable execution record) and
+	// mark them cancelled without touching the network.
+	if ctx.Err() != nil {
+		if execs, err := o.loadOrPrepareExecutions(context.WithoutCancel(ctx),
+			sessionID, projectID, rawTargets); err == nil {
+			for _, ex := range execs {
+				if ex.Status == models.ExecStatusQueued {
+					o.persistExecutionTerminal(ex.ID, models.ExecStatusCancelled,
+						"", 0, 0, 0, "cancelled before start", "")
+				}
+			}
+		}
+		o.finishSession(sessionID, time.Now(), models.ScanStatusCancelled, "cancelled before start")
+		return
+	}
 
 	started := time.Now()
 
@@ -611,10 +640,16 @@ func (o *Orchestrator) finishSession(sessionID uuid.UUID, started time.Time, sta
 	dur := time.Since(started).Milliseconds()
 	bg, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	// Defense in depth (NEW-4): a completion write must never resurrect a
+	// session the operator force-cancelled in the DB.
+	cond := `WHERE id = $1`
+	if status == models.ScanStatusCompleted || status == models.ScanStatusCompletedWithErrors {
+		cond += ` AND status <> 'cancelled'`
+	}
 	if _, err := o.db.Exec(bg, `
 		UPDATE scan_sessions
 		SET status = $2, error = $3, finished_at = now(), duration_ms = $4, updated_at = now()
-		WHERE id = $1`, sessionID, status, truncate(errMsg, 4096), dur); err != nil {
+		`+cond, sessionID, status, truncate(errMsg, 4096), dur); err != nil {
 		slog.Error("orchestration: finalize session", "session", sessionID.String(), "err", err)
 	}
 	o.publish(KindScanStatus, ScanStatusEvent{SessionID: sessionID, Status: status, Error: errMsg})

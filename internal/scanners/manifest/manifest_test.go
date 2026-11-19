@@ -56,6 +56,9 @@ func TestManifestValidate(t *testing.T) {
 		{"executable backtick", func(m *Manifest) { m.Executable = "`evil`" }, "invalid characters"},
 		{"executable pipe", func(m *Manifest) { m.Executable = "nmap|sh" }, "invalid characters"},
 		{"executable dollar", func(m *Manifest) { m.Executable = "$IFS" }, "invalid characters"},
+		{"executable relative with dir (SEC-005)", func(m *Manifest) { m.Executable = "./scanner" }, "invalid characters"},
+		{"executable parent traversal (SEC-005)", func(m *Manifest) { m.Executable = "../evil/scanner" }, "invalid characters"},
+		{"executable absolute with dotdot (SEC-005)", func(m *Manifest) { m.Executable = "/opt/../bin/evil" }, "invalid characters"},
 		{"executable space", func(m *Manifest) { m.Executable = "n map" }, "invalid characters"},
 		{"negative timeout", func(m *Manifest) { m.Configuration.Timeout = -5 }, "timeout must be > 0"},
 		{"duplicate option ids", func(m *Manifest) {

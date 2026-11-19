@@ -491,6 +491,42 @@ func TestOrchestratorCancel(t *testing.T) {
 	assert.False(t, orch.Cancel(uuid.New()), "unknown session is not cancellable")
 }
 
+// TestOrchestratorForceCancelNotResurrected (NEW-4): when the API layer
+// force-cancels a session in the DB (its in-process Cancel found no
+// handle), the running driver must not overwrite the terminal state —
+// completion writes skip rows already cancelled.
+func TestOrchestratorForceCancelNotResurrected(t *testing.T) {
+	db := openTestDB(t)
+	projectID := mkProject(t, db)
+	reg := newFakeRegistry()
+	reg.add("slow", &fakeScanner{name: "slow", delay: 2 * time.Second,
+		result: &scanners.ScanResult{Assets: []scanners.AssetObservationData{{Identity: "127.0.0.1"}}}}, 60)
+	orch, _ := newTestOrchestrator(t, db, reg, nil, nil)
+
+	sessionID := mkSession(t, db, projectID, "queued", []string{"127.0.0.1"}, []string{"slow"})
+	require.NoError(t, orch.StartSession(context.Background(), sessionID))
+
+	// Wait for the scanner to be actually running.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := reg.Get("slow"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("scanner never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Force-cancel path: DB row goes terminal without the in-process ctx.
+	_, err := db.Exec(context.Background(),
+		`UPDATE scan_sessions SET status = 'cancelled' WHERE id = $1`, sessionID)
+	require.NoError(t, err)
+
+	orch.Wait()
+	assert.Equal(t, models.ScanStatusCancelled, readSession(t, db, sessionID).Status,
+		"a force-cancelled session must never be resurrected as completed")
+}
+
 // TestOrchestratorCancelDuringPrepare covers the VER-005 race window: a
 // cancellation landing while runSession is still preparing (authorizing,
 // normalizing, creating execution rows) must produce a cancelled session

@@ -12,17 +12,35 @@ import (
 // project id: /projects/{id}/….
 var projectScopedPrefixes = []string{"/projects/"}
 
-// idLookups maps a single-segment resource prefix to a SQL that resolves the
-// resource's owning project id. Cross-project access is answered 404 (no
-// existence disclosure).
-var idLookups = map[string]string{
-	"/assets/":   `SELECT project_id FROM assets WHERE id = $1`,
-	"/findings/": `SELECT project_id FROM findings WHERE id = $1`,
-	"/scans/":    `SELECT project_id FROM scan_sessions WHERE id = $1`,
-	"/reports/":  `SELECT project_id FROM reports WHERE id = $1`,
-	"/profiles/": `SELECT project_id FROM scan_profiles WHERE id = $1`,
-	"/targets/":  `SELECT project_id FROM project_targets WHERE id = $1`,
-	"/sessions/": `SELECT project_id FROM scan_sessions WHERE id = $1`,
+// resourcePrefixes are single-segment resource paths whose id must resolve
+// to an accessible project.
+var resourcePrefixes = []string{
+	"/assets/", "/findings/", "/scans/", "/reports/",
+	"/profiles/", "/targets/", "/sessions/",
+}
+
+// owningProjectSQL returns the query resolving a resource's owning project
+// for a single-segment resource prefix (N-3: a switch instead of a
+// concatenated map so a future edit cannot turn a stray string into SQL).
+// Cross-project access is answered 404 (no existence disclosure).
+func owningProjectSQL(prefix string) (string, bool) {
+	switch prefix {
+	case "/assets/":
+		return `SELECT project_id FROM assets WHERE id = $1`, true
+	case "/findings/":
+		return `SELECT project_id FROM findings WHERE id = $1`, true
+	case "/scans/":
+		return `SELECT project_id FROM scan_sessions WHERE id = $1`, true
+	case "/reports/":
+		return `SELECT project_id FROM reports WHERE id = $1`, true
+	case "/profiles/":
+		return `SELECT project_id FROM scan_profiles WHERE id = $1`, true
+	case "/targets/":
+		return `SELECT project_id FROM project_targets WHERE id = $1`, true
+	case "/sessions/":
+		return `SELECT project_id FROM scan_sessions WHERE id = $1`, true
+	}
+	return "", false
 }
 
 // ProjectAccessMiddleware enforces project isolation centrally (SEC-008): any
@@ -53,8 +71,12 @@ func (s *Server) ProjectAccessMiddleware(next http.Handler) http.Handler {
 		}
 
 		// /{resource}/{id} — resolve owning project.
-		for pfx, sqlq := range idLookups {
+		for _, pfx := range resourcePrefixes {
 			if !strings.HasPrefix(trimmed, pfx) {
+				continue
+			}
+			sqlq, ok := owningProjectSQL(pfx)
+			if !ok {
 				continue
 			}
 			rest := strings.TrimPrefix(trimmed, pfx)

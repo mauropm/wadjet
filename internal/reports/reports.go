@@ -168,10 +168,17 @@ var ErrQueueSaturated = errors.New("report generation queue saturated")
 // schedule queues a generation job on the bounded worker pool. It reports
 // false when the queue is saturated.
 func (s *Service) schedule(reportID uuid.UUID) bool {
-	if n := atomic.LoadInt64(&s.queued); n >= maxQueuedReports {
-		return false
+	// CAS loop so the 200 bound is a hard bound (N-2: a load-then-add race
+	// under burst could exceed it).
+	for {
+		n := atomic.LoadInt64(&s.queued)
+		if n >= maxQueuedReports {
+			return false
+		}
+		if atomic.CompareAndSwapInt64(&s.queued, n, n+1) {
+			break
+		}
 	}
-	atomic.AddInt64(&s.queued, 1)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()

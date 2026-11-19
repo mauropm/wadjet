@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ type decodeTarget struct {
 	Tags   []string            `json:"tags"`
 	Meta   map[string]string   `json:"meta"`
 	Nested *struct{ S string } `json:"nested"`
+	Fields json.RawMessage     `json:"fields,omitempty"`
 }
 
 // decode runs DecodeJSON over the given raw body text.
@@ -33,7 +35,7 @@ func TestDecodeJSONNULRejection(t *testing.T) {
 	// the escape token below is built at runtime so this
 	// source file never embeds control bytes literally.
 	nul := "\x00"
-	esc := `\u0000` // the JSON escape sequence, six characters
+	esc := "\\" + "u0000"
 
 	cases := map[string]string{
 		"raw NUL byte in body":         `{"title":"a` + nul + `b"}`,
@@ -57,5 +59,26 @@ func TestDecodeJSONNULRejection(t *testing.T) {
 	// Baseline: DisallowUnknownFields still in force.
 	if err := decode(t, `{"nope":1}`); err == nil {
 		t.Error("unknown field accepted")
+	}
+}
+
+// TestDecodeJSONRawMessageNUL covers NEW-2: json.RawMessage DTO fields
+// (e.g. project settings) keep \u0000 escapes verbatim, and PostgreSQL
+// rejects them later in jsonb as an opaque 500. The walk must re-decode
+// byte-slice fields and reject them at the edge.
+func TestDecodeJSONRawMessageNUL(t *testing.T) {
+	if err := decode(t, `{"title":"ok","fields":{"k":"plain value"}}`); err != nil {
+		t.Fatalf("clean raw field rejected: %v", err)
+	}
+	esc := "\\" + "u0000"
+	if err := decode(t, `{"title":"ok","fields":{"k":"evil`+esc+`value"}}`); err == nil {
+		t.Error("escaped NUL inside RawMessage accepted")
+	}
+	if err := decode(t, `{"title":"ok","fields":{"deep":{"k":["x`+esc+`y"]}}}`); err == nil {
+		t.Error("escaped NUL nested inside RawMessage accepted")
+	}
+	// Non-JSON payloads are the caller's business, not the edge guard's.
+	if err := decode(t, `{"title":"ok","fields":"plain-string-not-json"}`); err != nil {
+		t.Errorf("non-JSON raw payload rejected: %v", err)
 	}
 }

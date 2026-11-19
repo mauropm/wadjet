@@ -38,11 +38,11 @@ import (
 // maxStderrBytes caps how much stderr is retained for the execution log.
 // maxStdoutBytes caps raw stdout capture on disk AND in memory (SEC-007):
 // the parser and raw-output persistence hold this buffer a few times, so
-// 64 MiB × concurrency keeps worst-case scanner memory bounded.
-const (
-	maxStderrBytes = 16 << 10 // 16 KiB
-	maxStdoutBytes = 64 << 20 // 64 MiB
-)
+// 64 MiB × concurrency keeps worst-case scanner memory bounded. A var only
+// so tests can exercise the overflow path cheaply.
+const maxStderrBytes = 16 << 10 // 16 KiB
+
+var maxStdoutBytes int64 = 64 << 20 // 64 MiB
 
 // OutputParser converts a scanner's raw stdout bytes into normalized
 // observations and findings. Registry supplies one per manifest output
@@ -286,10 +286,9 @@ func (a *Adapter) Execute(ctx context.Context, req scanners.ScanRequest) (*scann
 		}
 	}
 
-	st, err := os.Stat(outPath)
-	if err == nil && st.Size() > maxStdoutBytes {
-		return nil, fmt.Errorf("scanner %s: output exceeded %d byte cap (file %d bytes) — execution refused",
-			a.Name(), maxStdoutBytes, st.Size())
+	if stdout.overflowed {
+		return nil, fmt.Errorf("scanner %s: output exceeded %d byte cap — execution refused (truncated output would mislead the parser)",
+			a.Name(), maxStdoutBytes)
 	}
 	raw, err := os.ReadFile(outPath)
 	if err != nil {
@@ -381,14 +380,20 @@ func truncateForLog(s string, n int) string {
 }
 
 // cappedWriter writes at most limit bytes total (SEC-011); excess is
-// silently consumed so the child process never blocks on a full disk.
+// consumed so the child process never blocks on a full disk. overflowed
+// records that bytes were discarded, so Execute can refuse the truncated
+// result instead of handing a half-written document to the parser (NEW-3).
 type cappedWriter struct {
-	w         io.Writer
-	remaining int64
+	w          io.Writer
+	remaining  int64
+	overflowed bool
 }
 
 func (w *cappedWriter) Write(p []byte) (int, error) {
 	if w.remaining <= 0 {
+		if len(p) > 0 {
+			w.overflowed = true
+		}
 		return len(p), nil
 	}
 	if int64(len(p)) > w.remaining {
@@ -396,6 +401,7 @@ func (w *cappedWriter) Write(p []byte) (int, error) {
 			return 0, err
 		}
 		w.remaining = 0
+		w.overflowed = true
 		return len(p), nil // claim everything (io.Writer contract)
 	}
 	w.remaining -= int64(len(p))

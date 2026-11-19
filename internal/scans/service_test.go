@@ -618,6 +618,60 @@ func TestCancelScan(t *testing.T) {
 	resp.Body.Close()
 }
 
+// TestSSEStreamExitsOnEviction (NEW-1): when the bus evicts the stream's
+// subscriber as a slow consumer, the handler must terminate the stream
+// immediately. Without the ok-check on the channel receive, the loop spins
+// on the closed channel at 100% CPU until the client disconnects.
+func TestSSEStreamExitsOnEviction(t *testing.T) {
+	svc, db, _, _, bus := newTestService(t)
+	projectID := mkProjectRow(t, db)
+	var sessionID uuid.UUID
+	require.NoError(t, db.QueryRow(context.Background(),
+		`INSERT INTO scan_sessions (project_id, status) VALUES ($1,'running') RETURNING id`,
+		projectID).Scan(&sessionID))
+	srv := mount(t, svc, db)
+	defer srv.Close()
+
+	reqCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
+		srv.URL+"/scans/"+sessionID.String()+"/events", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+
+	// Overwhelm the subscriber: buffer (64) + eviction threshold + slack,
+	// none of it consumed by the handler (the test reads only afterwards).
+	go func() {
+		time.Sleep(200 * time.Millisecond) // let the subscription attach
+		for i := 0; i < 128; i++ {
+			bus.Publish(events.Event{Topic: "scan", Kind: "scan.progress",
+				Payload: map[string]any{"session_id": sessionID.String(), "assets_processed": i}})
+		}
+	}()
+
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		buf := &bytes.Buffer{}
+		_, e := buf.ReadFrom(resp.Body)
+		done <- e
+	}()
+	select {
+	case e := <-done:
+		if e != nil {
+			t.Fatalf("stream read failed: %v", e)
+		}
+		if d := time.Since(start); d > 5*time.Second {
+			t.Fatalf("stream took %v to end after eviction — busy-loop", d)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("SSE handler never exited after bus eviction (busy-loop)")
+	}
+}
+
 func TestScannerEndpoints(t *testing.T) {
 	svc, db, reg, _, _ := newTestService(t)
 	srv := mount(t, svc, db)

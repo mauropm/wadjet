@@ -135,7 +135,11 @@ func clientIP(r *http.Request) string {
 	// opted in with WADJET_TRUST_PROXY=1 (e.g. running behind nginx/Traefik).
 	if os.Getenv("WADJET_TRUST_PROXY") == "1" {
 		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			return strings.TrimSpace(strings.Split(fwd, ",")[0])
+			// Rightmost entry: under the standard proxy_add_x_forwarded_for
+			// config the leftmost entry is client-authored (spoofable); the
+			// rightmost was appended by our own trusted proxy.
+			parts := strings.Split(fwd, ",")
+			return strings.TrimSpace(parts[len(parts)-1])
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)

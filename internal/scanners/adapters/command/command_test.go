@@ -85,6 +85,48 @@ func TestBuildArgsRejections(t *testing.T) {
 	}
 }
 
+// TestExecuteStdoutCap (NEW-3): output beyond the cap must fail the
+// execution — a truncated document silently handed to a parser would
+// under-report findings.
+func TestExecuteStdoutCap(t *testing.T) {
+	old := maxStdoutBytes
+	maxStdoutBytes = 4096
+	defer func() { maxStdoutBytes = old }()
+
+	m := testManifest(t)
+	m.Executable = "/bin/cat"
+	m.Arguments = []string{"{{workdir}}/big.bin"}
+	adapter, err := New(m, nil)
+	require.NoError(t, err)
+
+	work := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(work, "big.bin"), make([]byte, 16*1024), 0o600))
+
+	_, err = adapter.Execute(context.Background(), scanners.ScanRequest{
+		SessionID:   uuid.New(),
+		ExecutionID: uuid.New(),
+		Targets:     []scanners.Target{{Raw: "127.0.0.1", Type: "ip"}},
+		Config:      scanners.ScannerConfig{},
+		WorkDir:     work,
+		Timeout:     10 * time.Second,
+	})
+	require.Error(t, err, "oversized output must refuse the execution")
+	assert.Contains(t, err.Error(), "exceeded")
+
+	// Under the cap still succeeds.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "big.bin"), make([]byte, 2048), 0o600))
+	res, err := adapter.Execute(context.Background(), scanners.ScanRequest{
+		SessionID:   uuid.New(),
+		ExecutionID: uuid.New(),
+		Targets:     []scanners.Target{{Raw: "127.0.0.1", Type: "ip"}},
+		Config:      scanners.ScannerConfig{},
+		WorkDir:     work,
+		Timeout:     10 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.Len(t, res.RawOutput, 2048)
+}
+
 func TestExecuteEcho(t *testing.T) {
 	m := testManifest(t)
 	m.Arguments = []string{"hello", "{{target}}"}

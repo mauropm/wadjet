@@ -76,10 +76,23 @@ func decodedHasNUL(v reflect.Value) bool {
 	case reflect.Pointer, reflect.Interface:
 		return !v.IsNil() && decodedHasNUL(v.Elem())
 	case reflect.Slice, reflect.Array:
-		// Byte slices are raw JSON payloads (json.RawMessage), whose NULs
-		// would themselves be escape sequences validated when decoded.
+		// Byte slices carry raw JSON payloads (json.RawMessage): their NULs
+		// live in the body as \u0000 escapes and survive verbatim into
+		// jsonb columns, where PostgreSQL rejects them later as an opaque
+		// 500 (same class as DEF-1 — NEW-2). Re-decode and walk the value.
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			return false
+			if v.Len() == 0 {
+				return false
+			}
+			raw := v.Slice(0, v.Len()).Bytes()
+			if bytes.IndexByte(raw, 0) >= 0 {
+				return true
+			}
+			var inner any
+			if err := json.Unmarshal(raw, &inner); err == nil {
+				return decodedHasNUL(reflect.ValueOf(inner))
+			}
+			return false // non-JSON bytes: callers validate their own payloads
 		}
 		for i := 0; i < v.Len(); i++ {
 			if decodedHasNUL(v.Index(i)) {
