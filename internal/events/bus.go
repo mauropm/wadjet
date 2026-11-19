@@ -71,9 +71,18 @@ func (b *Bus) Subscribe() (<-chan Event, func()) {
 	b.mu.Unlock()
 	return ch, func() {
 		b.mu.Lock()
-		delete(b.subs, ch)
-		delete(b.drops, ch)
+		// Membership doubles as the "still open" flag: Publish's eviction
+		// path removes-and-closes under the same lock, so closing only
+		// while present guarantees close-once from exactly one of the two
+		// paths (a plain delete+close here would double-close an evicted
+		// channel and panic when the SSE handler unwinds).
+		if _, ok := b.subs[ch]; ok {
+			delete(b.subs, ch)
+			delete(b.drops, ch)
+			b.mu.Unlock()
+			close(ch)
+			return
+		}
 		b.mu.Unlock()
-		close(ch)
 	}
 }
