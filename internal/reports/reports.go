@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -42,6 +43,9 @@ type Service struct {
 
 	sem chan struct{} // worker pool semaphore (N = maxConcurrentGenerations)
 	wg  sync.WaitGroup
+	// queued counts scheduled-but-unfinished generation jobs (SEC-012).
+	// Kept first-ish for 64-bit atomic alignment.
+	queued int64
 
 	// scopes snapshots the finding filter chosen at request time so the
 	// worker reproduces the exact scope. Queues are in-process; rows that
@@ -143,19 +147,40 @@ func (s *Service) createReport(r models.Report, flt *findingFilter) (models.Repo
 		s.rememberScope(r.ID, *flt) // must precede scheduling
 	}
 	s.publish(r)
-	s.schedule(r.ID)
+	if !s.schedule(r.ID) {
+		// Queue saturated: fail the row fast so clients see a retryable
+		// state instead of a report stuck in pending forever.
+		s.markFailed(r.ID, "generation queue saturated; retry later")
+		return r, ErrQueueSaturated
+	}
 	return r, nil
 }
 
-// schedule queues a generation job on the bounded worker pool.
-func (s *Service) schedule(reportID uuid.UUID) {
+// maxQueuedReports bounds the pending generation queue (SEC-012): each
+// request spawns a goroutine blocked on the worker semaphore, so an
+// unbounded queue turns repeated report creation into a goroutine/memory
+// flood. Callers get a retryable error past the limit.
+const maxQueuedReports = 200
+
+// ErrQueueSaturated signals the client may retry later (HTTP 503).
+var ErrQueueSaturated = errors.New("report generation queue saturated")
+
+// schedule queues a generation job on the bounded worker pool. It reports
+// false when the queue is saturated.
+func (s *Service) schedule(reportID uuid.UUID) bool {
+	if n := atomic.LoadInt64(&s.queued); n >= maxQueuedReports {
+		return false
+	}
+	atomic.AddInt64(&s.queued, 1)
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer atomic.AddInt64(&s.queued, -1)
 		s.sem <- struct{}{} // acquire
 		defer func() { <-s.sem }()
 		s.generate(reportID)
 	}()
+	return true
 }
 
 // generate renders one report to disk and records the outcome.
@@ -460,6 +485,10 @@ func (s *Service) handleCreateScanReport(w http.ResponseWriter, r *http.Request)
 		ProjectID: projectID, SessionID: &sessionID, Type: models.ReportTypeScan,
 	}, nil)
 	if err != nil {
+		if errors.Is(err, ErrQueueSaturated) {
+			api.WriteError(w, http.StatusServiceUnavailable, "report queue saturated, retry later")
+			return
+		}
 		api.WriteError(w, http.StatusInternalServerError, "cannot queue report")
 		return
 	}
@@ -553,6 +582,10 @@ func (s *Service) handleCreateFindingsReport(w http.ResponseWriter, r *http.Requ
 		ProjectID: projectID, SessionID: flt.SessionID, Type: typ,
 	}, &flt)
 	if err != nil {
+		if errors.Is(err, ErrQueueSaturated) {
+			api.WriteError(w, http.StatusServiceUnavailable, "report queue saturated, retry later")
+			return
+		}
 		api.WriteError(w, http.StatusInternalServerError, "cannot queue report")
 		return
 	}
@@ -581,6 +614,10 @@ func (s *Service) handleCreateFindingReport(w http.ResponseWriter, r *http.Reque
 		ProjectID: f.ProjectID, FindingID: &findingID, Type: models.ReportTypeFinding,
 	}, nil)
 	if err != nil {
+		if errors.Is(err, ErrQueueSaturated) {
+			api.WriteError(w, http.StatusServiceUnavailable, "report queue saturated, retry later")
+			return
+		}
 		api.WriteError(w, http.StatusInternalServerError, "cannot queue report")
 		return
 	}

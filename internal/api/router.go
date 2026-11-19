@@ -35,9 +35,12 @@ func NewServer(cfg *config.Config, db *database.DB, authService *auth.Service, a
 	s := &Server{cfg: cfg, db: db, auth: authService, audit: auditLogger, bus: bus}
 
 	r := chi.NewRouter()
+	r.Use(SecurityHeaders)
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Recoverer)
-	r.Use(chimw.RealIP)
+	// SECURITY: chimw.RealIP is deliberately NOT used — it trusts
+	// X-Forwarded-For unconditionally. clientIP() honors proxy headers only
+	// when WADJET_TRUST_PROXY=1.
 	r.Use(NewIPLimiter(map[string]rate.Limit{
 		"/api/v1/auth": rate.Limit(0.5), // ~30 login attempts per minute per IP
 		"/api/v1":      rate.Limit(50),
@@ -58,10 +61,14 @@ func NewServer(cfg *config.Config, db *database.DB, authService *auth.Service, a
 			r.With(s.AuthMiddleware).Post("/logout", s.handleLogout)
 			r.With(s.AuthMiddleware).Get("/me", s.handleMe)
 		})
-		r.Get("/events", s.handleEvents) // SSE, authenticated
-		r.With(s.AuthMiddleware).Get("/audit", s.handleAudit)
+		// SECURITY (SEC-003): /events and /audit are INSIDE the auth group —
+		// scan progress and audit trails are not anonymous-readable.
+		// (All Use() calls precede route registration, per chi's rule.)
 		r.Group(func(r chi.Router) {
 			r.Use(s.AuthMiddleware)
+			r.Use(s.ProjectAccessMiddleware)
+			r.Get("/events", s.handleEvents)
+			r.With(s.RequireAdmin).Get("/audit", s.handleAudit)
 			for _, svc := range extra {
 				svc.Register(r)
 			}

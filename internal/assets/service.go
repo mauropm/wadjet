@@ -425,6 +425,11 @@ func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// VER-002: when callers state a project scope, enforce it.
+	if !api.ProjectScopeMatches(r, view.Asset.ProjectID) {
+		api.WriteError(w, http.StatusNotFound, "not found")
+		return
+	}
 	api.WriteJSON(w, http.StatusOK, view)
 }
 
@@ -445,6 +450,11 @@ type updateAssetRequest struct {
 func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	if existing, err := s.Get(r.Context(), id); err == nil &&
+		!api.ProjectScopeMatches(r, existing.ProjectID) {
+		api.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 	var body updateAssetRequest
@@ -469,6 +479,11 @@ func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if existing, err := s.Get(r.Context(), id); err == nil &&
+		!api.ProjectScopeMatches(r, existing.ProjectID) {
+		api.WriteError(w, http.StatusNotFound, "not found")
+		return
+	}
 	if err := s.Delete(r.Context(), id); err != nil {
 		writeError(w, err)
 		return
@@ -479,6 +494,11 @@ func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleHistory(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	if existing, err := s.Get(r.Context(), id); err == nil &&
+		!api.ProjectScopeMatches(r, existing.ProjectID) {
+		api.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 	items, err := s.History(r.Context(), id, intQuery(r, "limit", 100), r.URL.Query().Get("type"))

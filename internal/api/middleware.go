@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,12 @@ type ctxKey int
 const userCtxKey ctxKey = 1
 
 // UserFromContext returns the authenticated user injected by the middleware.
+// WithUser returns a request carrying u as the authenticated principal.
+// Used by AuthMiddleware and by service tests exercising role-gated routes.
+func WithUser(r *http.Request, u *models.User) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), userCtxKey, u))
+}
+
 func UserFromContext(ctx context.Context) *models.User {
 	u, _ := ctx.Value(userCtxKey).(*models.User)
 	return u
@@ -122,8 +129,14 @@ func matchPrefix(limits map[string]rate.Limit, path string) (string, rate.Limit)
 }
 
 func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		return strings.Split(fwd, ",")[0]
+	// SECURITY: X-Forwarded-For is spoofable and must never be trusted by
+	// default — it would let any client pick its own rate-limit bucket (and
+	// forge audit-log IPs). Only honor it behind a trusted reverse proxy,
+	// opted in with WADJET_TRUST_PROXY=1 (e.g. running behind nginx/Traefik).
+	if os.Getenv("WADJET_TRUST_PROXY") == "1" {
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			return strings.TrimSpace(strings.Split(fwd, ",")[0])
+		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

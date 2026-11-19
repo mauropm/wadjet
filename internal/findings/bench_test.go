@@ -34,16 +34,53 @@ func BenchmarkFindingFingerprint(b *testing.B) {
 // transaction. Re-running it for the same execution also exercises the replay
 // path, which replaces that execution's observations.
 func BenchmarkIngest(b *testing.B) {
-	const (
-		assetsObserved   = 25
-		findingsPerAsset = 8
-	)
 	ctx := context.Background()
 	s := NewService(itest.DB(), assets.NewService(itest.DB()), nil)
 	project := benchProject(b)
 	session := benchSession(b, project)
 	exec := benchExecution(b, session)
 
+	result := benchResult()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := s.Ingest(ctx, session, exec, "nmap", result); err != nil {
+			b.Fatalf("ingest: %v", err)
+		}
+	}
+	b.ReportMetric(float64(len(result.Findings)), "findings/op")
+	b.ReportMetric(float64(len(result.Assets)), "assets/op")
+}
+
+// BenchmarkIngestFreshExecution is the path the orchestrator actually takes:
+// every scanner execution is new, so nothing is replayed and every finding is
+// an insert. Setting up the execution row is excluded from the timing.
+func BenchmarkIngestFreshExecution(b *testing.B) {
+	ctx := context.Background()
+	s := NewService(itest.DB(), assets.NewService(itest.DB()), nil)
+	project := benchProject(b)
+	session := benchSession(b, project)
+	result := benchResult()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		exec := benchExecution(b, session)
+		b.StartTimer()
+		if err := s.Ingest(ctx, session, exec, "nmap", result); err != nil {
+			b.Fatalf("ingest: %v", err)
+		}
+	}
+	b.ReportMetric(float64(len(result.Findings)), "findings/op")
+	b.ReportMetric(float64(len(result.Assets)), "assets/op")
+}
+
+// benchResult builds assetsObserved assets with findingsPerAsset findings each.
+func benchResult() *scanners.ScanResult {
+	const (
+		assetsObserved   = 25
+		findingsPerAsset = 8
+	)
 	result := &scanners.ScanResult{}
 	for a := 0; a < assetsObserved; a++ {
 		identity := "10.77." + strconv.Itoa(a/250) + "." + strconv.Itoa(a%250)
@@ -72,15 +109,7 @@ func BenchmarkIngest(b *testing.B) {
 			})
 		}
 	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if err := s.Ingest(ctx, session, exec, "nmap", result); err != nil {
-			b.Fatalf("ingest: %v", err)
-		}
-	}
-	b.ReportMetric(float64(len(result.Findings)), "findings/op")
-	b.ReportMetric(float64(len(result.Assets)), "assets/op")
+	return result
 }
 
 // The itest seed helpers take *testing.T, so the benchmark needs its own

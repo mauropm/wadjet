@@ -481,8 +481,17 @@ func loadFindings(ctx context.Context, db *database.DB, projectID uuid.UUID, flt
 	                   WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2
 	                   WHEN 'low' THEN 3 ELSE 4 END,
 	               f.created_at, f.id`
+	// SECURITY (SEC-007): hard cap on findings per generated report so a
+	// project with tens of thousands of findings cannot turn one download
+	// request into a multi-GB PDF/ZIP generation bomb.
+	q += fmt.Sprintf(` LIMIT $%d`, n)
+	args = append(args, maxFindingsPerReport)
 	return queryFindings(ctx, db, q, args)
 }
+
+// maxFindingsPerReport bounds findings rendered into any single generated
+// report (SEC-007 DoS bound). The API surfaces the cap in the report log.
+const maxFindingsPerReport = 500
 
 func loadFinding(ctx context.Context, db *database.DB, id uuid.UUID) (findingView, error) {
 	q := `WITH ranked AS (

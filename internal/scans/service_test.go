@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mauropm/wadjet/internal/api"
 	"github.com/mauropm/wadjet/internal/database"
 	"github.com/mauropm/wadjet/internal/events"
 	"github.com/mauropm/wadjet/internal/models"
@@ -165,10 +166,32 @@ func newTestService(t *testing.T) (*Service, *database.DB, *fakeRegistry, *fakeO
 	return svc, db, reg, orch, bus
 }
 
-func mount(svc *Service) *httptest.Server {
+func mount(t *testing.T, svc *Service, db *database.DB) *httptest.Server {
+	return mountAs(t, svc, db, "admin")
+}
+
+// mountAs mounts the service with an injected principal of the given role,
+// mirroring how AuthMiddleware populates the request context in production.
+// The principal is backed by a real users row (created_by has a FK).
+func mountAs(t *testing.T, svc *Service, db *database.DB, role string) *httptest.Server {
+	t.Helper()
+	var uid uuid.UUID
+	require.NoError(t, db.QueryRow(context.Background(),
+		`INSERT INTO users (email, name, password_hash, role)
+		 VALUES ($1,$2,'$2a$10$0000000000000000000000000000000000000000000000000000', $3)
+		 RETURNING id`,
+		role+"-"+uuid.New().String()+"@test.local", role, role).Scan(&uid))
 	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			next.ServeHTTP(w, api.WithUser(req, &models.User{
+				ID: uid, Email: role + "@test.local", Role: role,
+			}))
+		})
+	})
 	svc.Register(r)
 	s := httptest.NewServer(r)
+	t.Cleanup(s.Close)
 	return s
 }
 
@@ -229,7 +252,7 @@ func sessionStatus(t *testing.T, db *database.DB, id uuid.UUID) string {
 func TestCreateScanAdHoc(t *testing.T) {
 	svc, db, _, _, _ := newTestService(t)
 	projectID := mkProjectRow(t, db)
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 
 	resp := doJSON(t, http.MethodPost, srv.URL+"/projects/"+projectID.String()+"/scans", map[string]any{
@@ -270,7 +293,7 @@ func TestCreateScanAdHoc(t *testing.T) {
 func TestCreateScanValidation(t *testing.T) {
 	svc, db, _, _, _ := newTestService(t)
 	projectID := mkProjectRow(t, db)
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 	base := srv.URL + "/projects/"
 
@@ -335,7 +358,7 @@ func TestCreateScanFromProfile(t *testing.T) {
 	_, err = db.Exec(ctx, `INSERT INTO scan_profile_scanners (profile_id, scanner_id, config, sort_order) VALUES ($1,$2,'{}',1)`, profileID, betaID)
 	require.NoError(t, err)
 
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 
 	resp := doJSON(t, http.MethodPost, srv.URL+"/projects/"+projectID.String()+"/scans", map[string]any{
@@ -361,7 +384,7 @@ func TestCreateScanFromProfile(t *testing.T) {
 func TestGetScanDetailAndList(t *testing.T) {
 	svc, db, _, _, _ := newTestService(t)
 	projectID := mkProjectRow(t, db)
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 
 	resp := doJSON(t, http.MethodPost, srv.URL+"/projects/"+projectID.String()+"/scans", map[string]any{
@@ -422,7 +445,7 @@ func TestGetScanDetailAndList(t *testing.T) {
 func TestStartScanLifecycle(t *testing.T) {
 	svc, db, _, orch, _ := newTestService(t)
 	projectID := mkProjectRow(t, db)
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 
 	resp := doJSON(t, http.MethodPost, srv.URL+"/projects/"+projectID.String()+"/scans", map[string]any{
@@ -464,7 +487,7 @@ func TestStartScanOrchestratorFailureRollsBack(t *testing.T) {
 	svc, db, _, orch, _ := newTestService(t)
 	orch.startErr = errors.New("session is not queued")
 	projectID := mkProjectRow(t, db)
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 
 	resp := doJSON(t, http.MethodPost, srv.URL+"/projects/"+projectID.String()+"/scans", map[string]any{
@@ -487,7 +510,7 @@ func TestStartScanOrchestratorFailureRollsBack(t *testing.T) {
 func TestStartCancelledResetsExecutions(t *testing.T) {
 	svc, db, _, orch, _ := newTestService(t)
 	projectID := mkProjectRow(t, db)
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 
 	resp := doJSON(t, http.MethodPost, srv.URL+"/projects/"+projectID.String()+"/scans", map[string]any{
@@ -532,7 +555,7 @@ func TestStartCancelledResetsExecutions(t *testing.T) {
 func TestCancelScan(t *testing.T) {
 	svc, db, _, orch, _ := newTestService(t)
 	projectID := mkProjectRow(t, db)
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 
 	// queued session: direct cancel
@@ -574,8 +597,8 @@ func TestCancelScan(t *testing.T) {
 }
 
 func TestScannerEndpoints(t *testing.T) {
-	svc, _, reg, _, _ := newTestService(t)
-	srv := mount(svc)
+	svc, db, reg, _, _ := newTestService(t)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 
 	resp := doJSON(t, http.MethodGet, srv.URL+"/scanners", nil)
@@ -608,6 +631,22 @@ func TestScannerEndpoints(t *testing.T) {
 	resp.Body.Close()
 	assert.True(t, reg.Enabled("alpha"))
 
+	// RBAC (SEC-002): enabling/disabling scanners is admin-only.
+	userSrv := mountAs(t, svc, db, "user")
+	resp = doJSON(t, http.MethodPut, userSrv.URL+"/scanners/alpha/enabled", map[string]any{"enabled": false})
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode, "non-admin must not toggle scanners")
+	resp.Body.Close()
+	assert.True(t, reg.Enabled("alpha"), "toggle must not have taken effect")
+
+	// Unauthenticated (no principal injected) is rejected too.
+	noAuth := chi.NewRouter()
+	svc.Register(noAuth)
+	noAuthSrv := httptest.NewServer(noAuth)
+	defer noAuthSrv.Close()
+	resp = doJSON(t, http.MethodPut, noAuthSrv.URL+"/scanners/alpha/enabled", map[string]any{"enabled": false})
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	resp.Body.Close()
+
 	resp = doJSON(t, http.MethodPost, srv.URL+"/scanners/alpha/check", nil)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	resp.Body.Close()
@@ -616,7 +655,7 @@ func TestScannerEndpoints(t *testing.T) {
 func TestSSEStreamFiltersSession(t *testing.T) {
 	svc, db, _, _, bus := newTestService(t)
 	projectID := mkProjectRow(t, db)
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 
 	resp := doJSON(t, http.MethodPost, srv.URL+"/projects/"+projectID.String()+"/scans", map[string]any{
@@ -662,7 +701,7 @@ func TestSSEStreamFiltersSession(t *testing.T) {
 func TestDecodeBodyLimit(t *testing.T) {
 	svc, db, _, _, _ := newTestService(t)
 	projectID := mkProjectRow(t, db)
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 
 	huge := make([]string, 60000)
@@ -691,7 +730,7 @@ func TestProfileBindingsWrongProject(t *testing.T) {
 	require.NoError(t, db.QueryRow(context.Background(),
 		`INSERT INTO scan_profiles (project_id, name) VALUES ($1,'p') RETURNING id`, other).Scan(&profileID))
 
-	srv := mount(svc)
+	srv := mount(t, svc, db)
 	defer srv.Close()
 	resp := doJSON(t, http.MethodPost, srv.URL+"/projects/"+projectID.String()+"/scans", map[string]any{
 		"targets":    []string{"10.0.0.1"},

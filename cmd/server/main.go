@@ -41,6 +41,15 @@ func mustList(ctx context.Context, r *registry.Registry) []models.ScannerRecord 
 func main() {
 	cfg := config.Load()
 
+	// SECURITY (SEC-006): never run production with the default signing
+	// secret — anyone could mint valid session credentials.
+	if !cfg.IsDevelopment() && cfg.SessionSecret == "dev-se…e-me" {
+		log.Fatal("wadjet: refusing to start in production with the default WADJET_SESSION_SECRET")
+	}
+	if cfg.SessionSecret == "dev-se…e-me" {
+		log.Printf("wadjet: WARNING — using default session secret; set WADJET_SESSION_SECRET before any non-local deployment")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -55,6 +64,14 @@ func main() {
 	}
 
 	authService := auth.NewService(db, cfg.SessionSecret)
+	// SECURITY (SEC-005): production must not boot with the shipped default
+	// admin password — anyone knowing the product can claim the instance.
+	if cfg.AdminPassword == "wadjet-admin" {
+		if !cfg.IsDevelopment() {
+			log.Fatal("wadjet: refusing to start in production with the default WADJET_ADMIN_PASSWORD")
+		}
+		log.Printf("wadjet: WARNING — using default admin password; set WADJET_ADMIN_PASSWORD before any non-local deployment")
+	}
 	if err := authService.EnsureAdmin(ctx, cfg.AdminEmail, cfg.AdminPassword); err != nil {
 		log.Fatalf("wadjet: bootstrap admin failed: %v", err)
 	}
@@ -99,6 +116,11 @@ func main() {
 	})
 	scansSvc := scans.NewService(db, scannerRegistry, orchestrator, bus)
 	reportsSvc := reports.NewService(db, cfg, bus, auditLogger)
+
+	// VER-006: fail sessions/executions orphaned by a previous process.
+	if err := orchestrator.RecoverInterrupted(ctx); err != nil {
+		log.Printf("wadjet: scan recovery warning: %v", err)
+	}
 
 	extra := []api.Registrable{
 		projectsSvc, targetsSvc, assetsSvc, findingsSvc, profilesSvc,

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -133,6 +134,33 @@ func (s *Service) entries(ctx context.Context, projectID uuid.UUID) ([]Entry, er
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// IsIPExcluded reports whether a resolved address matches any of the
+// project's excluded entries (SEC-004, consumed by the orchestrator's
+// post-DNS re-check). CIDR exclusions match any address inside them; an IP
+// exclusion matches exactly.
+func (s *Service) IsIPExcluded(ctx context.Context, projectID uuid.UUID, addr netip.Addr) (bool, error) {
+	entries, err := s.entries(ctx, projectID)
+	if err != nil {
+		return false, err
+	}
+	addr = addr.Unmap()
+	for _, e := range entries {
+		if !e.Excluded {
+			continue
+		}
+		if strings.Contains(e.Target, "/") {
+			if p, err := netip.ParsePrefix(e.Target); err == nil && p.Masked().Contains(addr) {
+				return true, nil
+			}
+			continue
+		}
+		if a, err := netip.ParseAddr(e.Target); err == nil && a.Unmap() == addr {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ───────────────────────────────────────────── CRUD

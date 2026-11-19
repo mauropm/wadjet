@@ -35,11 +35,9 @@ func (l *Logger) Log(ctx context.Context, userID *uuid.UUID, action, resourceTyp
 }
 
 // LogRequest is a convenience wrapper extracting the client IP.
+// SECURITY: RemoteAddr only — X-Forwarded-For is spoofable and never trusted.
 func (l *Logger) LogRequest(r *http.Request, userID *uuid.UUID, action, resourceType, resourceID string, details any) {
 	ip := r.RemoteAddr
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		ip = fwd
-	}
 	l.Log(r.Context(), userID, action, resourceType, resourceID, details, ip)
 }
 

@@ -389,6 +389,21 @@ func TestFindingsHTTPSurface(t *testing.T) {
 	}
 
 	fid := ids["Info banner"].ID
+	// VER-002: a stated project scope that does not own the finding is 404
+	// across direct-id routes.
+	foreign := itest.NewProject(t, "").String()
+	for _, c := range []struct{ method, path, body string }{
+		{"GET", "/findings/" + fid.String() + "?project_id=" + foreign, ""},
+		{"GET", "/findings/" + fid.String() + "/history?project_id=" + foreign, ""},
+		{"PUT", "/findings/" + fid.String() + "/status?project_id=" + foreign, `{"status":"triaged"}`},
+	} {
+		if rec := do(c.method, c.path, c.body); rec.Code != http.StatusNotFound {
+			t.Fatalf("cross-project %s %s code = %d, want 404", c.method, c.path, rec.Code)
+		}
+	}
+	if rec := do("GET", "/findings/"+fid.String()+"?project_id="+project.String(), ""); rec.Code != http.StatusOK {
+		t.Fatalf("scoped get code = %d, want 200", rec.Code)
+	}
 	if rec := do("GET", "/findings/"+fid.String(), ""); rec.Code != http.StatusOK {
 		t.Fatalf("get code = %d", rec.Code)
 	} else if !strings.Contains(rec.Body.String(), `"fingerprint"`) {

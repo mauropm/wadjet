@@ -128,6 +128,41 @@ Isolation is deliberate: the shared `wadjet` development database is in a stale,
 half-migrated state and several agents run concurrently, so each package creates and drops
 its own database. `WADJET_ITEST_SHARED=1` opts out and uses the shared database instead.
 
+## Measured baseline
+
+`go test -bench . -benchtime 100x ./internal/findings/` on Apple M4, PostgreSQL in a local
+Docker container (baseline for regression comparison, not an SLA):
+
+| benchmark | result |
+| --- | --- |
+| `BenchmarkFindingFingerprint` (20 000 iters) | ~1.2 µs/op |
+| `BenchmarkIngest` — 25 assets + 200 findings, one transaction, replaying the same execution | ~103 ms/op (≈0.46 ms per finding) |
+| `BenchmarkIngestFreshExecution` — same payload, a new execution per iteration | ~117 ms/op |
+
+The write path is dominated by one round trip per statement (asset upsert, finding
+`INSERT`, `SELECT … FOR UPDATE`, `UPDATE`, observation `INSERT`). If a scan ever needs to
+ingest tens of thousands of findings per execution, the fix is to batch the observation
+inserts with `unnest` and to prepare the finding statements; the semantics documented
+above would not change. **No performance improvement is claimed — these are the current
+measured numbers, not a comparison.**
+
+### Fingerprint collision bound (independently computed)
+
+The fingerprint keeps 32 hex characters = 128 bits, and uniqueness only has to hold inside
+one `(project_id, asset_id)` scope because that pair is part of the unique key. For `n`
+findings in one scope, the birthday-bound collision probability is `1 - exp(-n²/2¹²⁹)`:
+
+| n findings in one asset scope | P(at least one collision) |
+| --- | --- |
+| 10⁵ | 1.47 × 10⁻²⁹ |
+| 10⁶ | 1.47 × 10⁻²⁷ |
+| 10⁷ | 1.47 × 10⁻²⁵ |
+| 10⁹ | 1.47 × 10⁻²¹ |
+
+Wolfram|Alpha gives `1.469367938527859… × 10⁻²⁷` for n = 10⁶ and an independent Python
+`decimal` computation gives `1.4693679385279E-27`, so the two agree. The 50 % point is
+n ≈ 2⁶⁴ ≈ 1.8 × 10¹⁹ findings for a single asset, which is unreachable for this platform.
+
 ## Notes / contract observations
 
 * `go.mod` does **not** contain `stretchr/testify` or `yaml.v3` (only chi, uuid, pgx,
@@ -180,6 +215,15 @@ its own database. `WADJET_ITEST_SHARED=1` opts out and uses the shared database 
    findings are dropped by design; the orchestrator should feed asset observations first.
 5. `assets.UpsertFromScan` never blanks data, which also means a scanner cannot *correct*
    a wrong value (e.g. a stale `hostname`). Only the manual edit path overwrites.
+6. The replay rule means two `Ingest` calls for the **same execution** running *at the same
+   time* would each delete the other's observation rows and the last committer's rows
+   survive. That is not a supported pattern (one execution is one scanner run, and the
+   orchestrator calls `Ingest` once when it finishes), and no finding row can be lost — the
+   unique key keeps the inventory correct — but a concurrent duplicate delivery would show
+   one observation instead of two.
+7. `scan_sessions.findings_created` / `findings_updated` are accumulated per call, so a
+   retried execution adds to them a second time while the row-level state stays correct.
+   They drive the progress view; any future report must count rows, not counters.
 
 ## Progress log
 

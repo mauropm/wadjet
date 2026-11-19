@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -35,10 +36,13 @@ import (
 )
 
 // maxStderrBytes caps how much stderr is retained for the execution log.
-const maxStderrBytes = 16 << 10 // 16 KiB
-
-// maxOutputBytes caps raw stdout capture (512 MiB).
-const maxOutputBytes = 512 << 20
+// maxStdoutBytes caps raw stdout capture on disk AND in memory (SEC-007):
+// the parser and raw-output persistence hold this buffer a few times, so
+// 64 MiB × concurrency keeps worst-case scanner memory bounded.
+const (
+	maxStderrBytes = 16 << 10 // 16 KiB
+	maxStdoutBytes = 64 << 20 // 64 MiB
+)
 
 // OutputParser converts a scanner's raw stdout bytes into normalized
 // observations and findings. Registry supplies one per manifest output
@@ -243,12 +247,15 @@ func (a *Adapter) Execute(ctx context.Context, req scanners.ScanRequest) (*scann
 		return nil, fmt.Errorf("scanner %s: create output file: %w", a.Name(), err)
 	}
 	defer outFile.Close()
+	// SECURITY (SEC-011): a rogue or runaway scanner must not fill the disk.
+	// Output beyond maxStdoutBytes is discarded (and flagged below).
+	stdout := &cappedWriter{w: outFile, remaining: maxStdoutBytes}
 
 	stderr := &truncWriter{limit: maxStderrBytes}
 	cmd := exec.CommandContext(runCtx, a.manifest.Executable, args...)
 	cmd.Dir = req.WorkDir
 	cmd.Env = buildEnv(a.manifest.Configuration.EnvAllowlist)
-	cmd.Stdout = outFile
+	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.WaitDelay = 5 * time.Second
 
@@ -279,6 +286,11 @@ func (a *Adapter) Execute(ctx context.Context, req scanners.ScanRequest) (*scann
 		}
 	}
 
+	st, err := os.Stat(outPath)
+	if err == nil && st.Size() > maxStdoutBytes {
+		return nil, fmt.Errorf("scanner %s: output exceeded %d byte cap (file %d bytes) — execution refused",
+			a.Name(), maxStdoutBytes, st.Size())
+	}
 	raw, err := os.ReadFile(outPath)
 	if err != nil {
 		return nil, fmt.Errorf("scanner %s: read output file: %w", a.Name(), err)
@@ -366,4 +378,26 @@ func truncateForLog(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// cappedWriter writes at most limit bytes total (SEC-011); excess is
+// silently consumed so the child process never blocks on a full disk.
+type cappedWriter struct {
+	w         io.Writer
+	remaining int64
+}
+
+func (w *cappedWriter) Write(p []byte) (int, error) {
+	if w.remaining <= 0 {
+		return len(p), nil
+	}
+	if int64(len(p)) > w.remaining {
+		if _, err := w.w.Write(p[:w.remaining]); err != nil {
+			return 0, err
+		}
+		w.remaining = 0
+		return len(p), nil // claim everything (io.Writer contract)
+	}
+	w.remaining -= int64(len(p))
+	return w.w.Write(p)
 }

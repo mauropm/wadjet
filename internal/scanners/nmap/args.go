@@ -49,7 +49,9 @@ var TimingTemplates = map[string]string{
 // "script_categories" option. Dangerous categories (intrusive, dos, exploit,
 // fuzzer, malware, all) are intentionally absent.
 var ScriptCategories = []string{
-	"default", "safe", "vuln", "discovery", "auth", "version", "broadcast", "brute", "external",
+	// SECURITY: brute (password guessing), broadcast and external (touch
+	// third-party infrastructure beyond the target) are deliberately absent.
+	"default", "safe", "vuln", "discovery", "auth", "version",
 }
 
 // KnownScripts is the allowlist of individually selectable NSE script ids

@@ -41,6 +41,15 @@ func NewService(db *database.DB, secret string) *Service {
 	return &Service{db: db, secret: []byte(secret)}
 }
 
+// HasUsers reports whether any account exists (bootstrap gate).
+func (s *Service) HasUsers(ctx context.Context) bool {
+	var count int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&count); err != nil {
+		return true // fail closed: on error assume users exist
+	}
+	return count > 0
+}
+
 // EnsureAdmin creates the bootstrap admin account when no users exist.
 func (s *Service) EnsureAdmin(ctx context.Context, email, password string) error {
 	var count int
@@ -50,8 +59,8 @@ func (s *Service) EnsureAdmin(ctx context.Context, email, password string) error
 	if count > 0 {
 		return nil
 	}
-	if len(password) < 8 {
-		return fmt.Errorf("bootstrap admin password too short")
+	if len(password) < 10 {
+		return fmt.Errorf("bootstrap admin password must be at least 10 characters")
 	}
 	_, err := s.CreateUser(ctx, email, "Administrator", password, "admin")
 	return err
@@ -62,7 +71,7 @@ func (s *Service) CreateUser(ctx context.Context, email, name, password, role st
 	if len(password) < 10 {
 		return nil, ErrWeakPassword
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
 	if err != nil {
 		return nil, err
 	}

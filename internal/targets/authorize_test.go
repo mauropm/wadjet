@@ -494,6 +494,20 @@ func TestAuthorizeTable(t *testing.T) {
 			want:    ErrInvalidTarget,
 		},
 		{
+			// SEC-001 PoC: userinfo must not smuggle a different scanned host.
+			name:    "url userinfo is rejected",
+			entries: []Entry{ent("evil.example.com", "hostname", false)},
+			target:  "http://evil.example.com@127.0.0.1/",
+			want:    ErrInvalidTarget,
+		},
+		{
+			// SEC-001 PoC: no command-substitution strings survive parsing.
+			name:    "command substitution in url is rejected",
+			entries: []Entry{ent("127.0.0.1", "ip", false)},
+			target:  "http://$(touch /tmp/pwned)",
+			want:    ErrInvalidTarget,
+		},
+		{
 			name:    "sql fragment is invalid",
 			entries: []Entry{ent("example.com", "domain", false)},
 			target:  "10.0.0.1' OR '1'='1",

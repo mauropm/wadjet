@@ -30,12 +30,13 @@ type Config struct {
 // Load builds a Config from environment variables with local-development defaults.
 func Load() *Config {
 	c := &Config{
-		Port:            env("WADJET_PORT", "8080"),
-		Env:             env("WADJET_ENV", "development"),
-		DatabaseURL:     env("DATABASE_URL", "postgres://wadjet:***@127.0.0.1:5432/wadjet?sslmode=disable"),
-		SessionSecret:   env("WADJET_SESSION_SECRET", "dev-se…e-me"),
-		AdminEmail:      env("WADJET_ADMIN_EMAIL", "admin@wadjet.local"),
-		AdminPassword:   env("WADJET_ADMIN_PASSWORD", "admin"),
+		Port:          env("WADJET_PORT", "8080"),
+		Env:           env("WADJET_ENV", "development"),
+		DatabaseURL:   env("DATABASE_URL", "postgres://wadjet:***@127.0.0.1:5432/wadjet?sslmode=disable"),
+		SessionSecret: env("WADJET_SESSION_SECRET", "dev-se…e-me"),
+		AdminEmail:    env("WADJET_ADMIN_EMAIL", "admin@wadjet.local"),
+		// Matches .env.example; EnsureAdmin enforces a ≥10-char minimum.
+		AdminPassword:   env("WADJET_ADMIN_PASSWORD", "wadjet-admin"),
 		ReportDir:       env("WADJET_REPORT_DIR", "./data/reports"),
 		RawOutputDir:    env("WADJET_RAW_OUTPUT_DIR", "./data/raw"),
 		ScanWorkDir:     env("WADJET_SCAN_WORKDIR", "./data/scanwork"),

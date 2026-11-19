@@ -335,7 +335,7 @@ func buildZip(items []zipFinding) ([]byte, error) {
 		}
 		if err := cw.Write([]string{
 			fmt.Sprintf("FND-%d", it.Seq),
-			it.Title, it.Severity, it.Asset, it.Fingerprint,
+			csvSafe(it.Title), csvSafe(it.Severity), csvSafe(it.Asset), csvSafe(it.Fingerprint),
 		}); err != nil {
 			return nil, err
 		}

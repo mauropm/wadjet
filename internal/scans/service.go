@@ -57,7 +57,7 @@ func NewService(db *database.DB, reg Registry, orch Orchestrator, bus *events.Bu
 func (s *Service) Register(r chi.Router) {
 	r.Get("/scanners", s.listScanners)
 	r.Get("/scanners/{id}", s.getScanner)
-	r.Put("/scanners/{id}/enabled", s.setScannerEnabled)
+	r.With(api.RequireAdmin).Put("/scanners/{id}/enabled", s.setScannerEnabled)
 	r.Post("/scanners/{id}/check", s.checkScanner)
 
 	r.Post("/projects/{id}/scans", s.createScan)
@@ -172,6 +172,20 @@ type CreateRequest struct {
 	Targets        []string               `json:"targets"`
 	ScannerConfigs []ScannerConfigRequest `json:"scanner_configs"`
 	ProfileID      *uuid.UUID             `json:"profile_id"`
+}
+
+// revalidateTargets re-applies the target bounds after profile substitution
+// (SEC-008: targets arriving via a profile must not bypass request limits).
+func (c *CreateRequest) revalidateTargets() error {
+	if len(c.Targets) == 0 || len(c.Targets) > 500 {
+		return errors.New("profile targets must number 1-500 entries")
+	}
+	for _, t := range c.Targets {
+		if t == "" || len(t) > 253 {
+			return errors.New("each profile target must be 1-253 characters")
+		}
+	}
+	return nil
 }
 
 // validate normalizes and bounds the create request.
@@ -315,6 +329,12 @@ func (s *Service) createScan(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(profileTargets) > 0 {
 			req.Targets = profileTargets
+			// SECURITY (SEC-008): profile-supplied targets replace the
+			// request list after validation — re-apply the same bounds.
+			if err := req.revalidateTargets(); err != nil {
+				api.WriteError(w, http.StatusUnprocessableEntity, err.Error())
+				return
+			}
 		}
 	} else {
 		for _, sc := range req.ScannerConfigs {

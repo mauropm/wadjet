@@ -151,6 +151,9 @@ type recordingSink struct {
 	mu    sync.Mutex
 	calls []sinkCall
 	err   error
+	// db, when set, makes the stub honor the production sink contract of
+	// being the single writer of scan_sessions counters (VER-001).
+	db *database.DB
 }
 
 type sinkCall struct {
@@ -162,6 +165,17 @@ type sinkCall struct {
 func (s *recordingSink) Ingest(ctx context.Context, sessionID, executionID uuid.UUID, scannerName string, result *scanners.ScanResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Mirror findings.Service.Ingest: the sink owns session counters.
+	if s.db != nil && result != nil {
+		if _, err := s.db.Exec(ctx, `
+			UPDATE scan_sessions
+			SET assets_processed = assets_processed + $2,
+			    findings_created = findings_created + $3
+			WHERE id = $1`,
+			sessionID, len(result.Assets), len(result.Findings)); err != nil {
+			return err
+		}
+	}
 	if s.err != nil {
 		return s.err
 	}
@@ -267,7 +281,7 @@ func TestOrchestratorHappyPath(t *testing.T) {
 			Errors:   []scanners.ScannerError{{Target: "10.9.9.8", Error: "host down"}},
 		},
 	}, 30)
-	sink := &recordingSink{}
+	sink := &recordingSink{db: db} // honors the VER-001 single-counter-writer contract
 	orch, bus := newTestOrchestrator(t, db, reg, sink, nil)
 
 	stop := collectBusEvents(t, bus, nil)
@@ -475,6 +489,54 @@ func TestOrchestratorCancel(t *testing.T) {
 	assert.Equal(t, models.ExecStatusCancelled, execs[0].Status)
 
 	assert.False(t, orch.Cancel(uuid.New()), "unknown session is not cancellable")
+}
+
+// TestOrchestratorCancelDuringPrepare covers the VER-005 race window: a
+// cancellation landing while runSession is still preparing (authorizing,
+// normalizing, creating execution rows) must produce a cancelled session
+// with a cancelled execution — never completed/failed with an empty or
+// queued execution list. Cancellation is issued aggressively in a tight
+// retry loop so it lands in the prepare window.
+func TestOrchestratorCancelDuringPrepare(t *testing.T) {
+	db := openTestDB(t)
+	projectID := mkProject(t, db)
+	reg := newFakeRegistry()
+	reg.add("slow", &fakeScanner{name: "slow", delay: 30 * time.Second}, 60)
+	orch, _ := newTestOrchestrator(t, db, reg, nil, nil)
+
+	for attempt := 0; attempt < 3; attempt++ {
+		sessionID := mkSession(t, db, projectID, "queued", []string{"127.0.0.1"}, []string{"slow"})
+		require.NoError(t, orch.StartSession(context.Background(), sessionID))
+
+		// Hammer Cancel from immediately after start until it lands.
+		deadline := time.Now().Add(5 * time.Second)
+		cancelled := false
+		for !cancelled && time.Now().Before(deadline) {
+			cancelled = orch.Cancel(sessionID)
+		}
+		require.True(t, cancelled, "session never became cancellable")
+		orch.Wait()
+
+		sm := readSession(t, db, sessionID)
+		assert.Equal(t, models.ScanStatusCancelled, sm.Status,
+			"attempt %d: cancel during preparation must yield cancelled", attempt)
+
+		var execs []models.ScannerExecution
+		settle := time.Now().Add(5 * time.Second)
+		for {
+			execs = readExecutions(t, db, sessionID)
+			if len(execs) == 1 && execs[0].Status != models.ExecStatusQueued {
+				break
+			}
+			if time.Now().After(settle) {
+				break
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		require.Len(t, execs, 1, "attempt %d: execution row must exist", attempt)
+		assert.Equal(t, models.ExecStatusCancelled, execs[0].Status,
+			"attempt %d: execution must be cancelled", attempt)
+	}
 }
 
 func TestOrchestratorExecutionTimeout(t *testing.T) {

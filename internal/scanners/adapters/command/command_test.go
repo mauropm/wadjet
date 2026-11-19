@@ -66,6 +66,9 @@ func TestBuildArgsRejections(t *testing.T) {
 		{"injection in target", []string{"{{target}}"}, []string{"10.0.0.1; rm -rf /"}},
 		{"space in target", []string{"{{target}}"}, []string{"10.0.0.1 && id"}},
 		{"flag injection as target", []string{"{{target}}"}, []string{"--evil"}},
+		{"command substitution in target", []string{"{{target}}"}, []string{"http://$(touch /tmp/pwned)"}},
+		{"URL userinfo in target", []string{"{{target}}"}, []string{"http://evil.example@127.0.0.1/"}},
+		{"semicolon+url in target", []string{"{{target}}"}, []string{"127.0.0.1; touch /tmp/pwned"}},
 		{"empty targets", []string{"{{target}}"}, nil},
 	}
 	for _, tc := range tests {

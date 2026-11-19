@@ -125,6 +125,18 @@ func parseURL(trimmed, raw string) (ParsedTarget, error) {
 	if host == "" {
 		return ParsedTarget{}, fmt.Errorf("%w: %q has no host", ErrInvalidTarget, raw)
 	}
+	// Security: reject URLs whose userinfo (user@host) makes the authorized
+	// string diverge from the scanned host — evil.example@127.0.0.1 reads as
+	// evil.example but scans 127.0.0.1. It has no scanning purpose.
+	if u.User != nil {
+		return ParsedTarget{}, fmt.Errorf("%w: %q must not contain userinfo", ErrInvalidTarget, raw)
+	}
+	// Query and fragment carry no scanning meaning and are canonical
+	// surfaces for log/label spoofing: strip them. (The path is kept: web
+	// scanners may use it; port scanners ignore it.)
+	if i := strings.IndexAny(trimmed, "?#"); i >= 0 {
+		trimmed = trimmed[:i]
+	}
 	if addr, err := netip.ParseAddr(host); err == nil {
 		if addr.Zone() != "" {
 			return ParsedTarget{}, fmt.Errorf("%w: %q has an address zone", ErrInvalidTarget, raw)

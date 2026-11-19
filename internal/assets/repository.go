@@ -54,6 +54,9 @@ func scanAsset(row pgx.Row) (models.Asset, error) {
 	return a, err
 }
 
+// maxObservationRaw bounds stored asset_observations.raw (SEC-010).
+const maxObservationRaw = 1 << 20 // 1 MiB
+
 const observationCols = `id, asset_id, scan_session_id, scanner_execution_id, observation_type,
 	observed_at, raw, source, created_at`
 
@@ -129,6 +132,15 @@ func (s *Service) UpsertFromScanTx(ctx context.Context, q Querier, projectID, se
 	}
 	if len(raw) == 0 {
 		raw = json.RawMessage(`{}`)
+	}
+	// SECURITY (SEC-010): bound per-observation payload so a malicious or
+	// buggy scanner cannot bloat the inventory table with multi-megabyte
+	// JSONB rows. Over-limit payloads are replaced by a bounded stub that
+	// preserves the identity and flags the truncation.
+	if len(raw) > maxObservationRaw {
+		raw = json.RawMessage(fmt.Sprintf(
+			`{"truncated":true,"identity":%q,"source":%q,"bytes":%d}`,
+			obs.Identity, scannerName, len(raw)))
 	}
 
 	asset, created, err := upsertAssetRow(ctx, q, projectID, identity, inferredType, ip, ipv6, mac, osName, osAccuracy, hostname, domain)

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sync"
@@ -49,6 +50,15 @@ type Options struct {
 	WorkDir string
 	// Normalizer overrides the default target normalizer (tests).
 	Normalizer *TargetNormalizer
+	// MaxAggregateTargets bounds the total expanded exec-target count across
+	// ALL session targets (SEC-008). Default 10000.
+	MaxAggregateTargets int
+}
+
+// IPExcluder is an optional capability of a TargetAuthorizer: check whether
+// a resolved address falls in the project's excluded entries (SEC-004).
+type IPExcluder interface {
+	IsIPExcluded(ctx context.Context, projectID uuid.UUID, addr netip.Addr) (bool, error)
 }
 
 // Orchestrator runs scan sessions.
@@ -58,6 +68,7 @@ type Orchestrator struct {
 	sink       scanners.ResultSink
 	bus        *events.Bus
 	authorizer TargetAuthorizer
+	ipExcluder IPExcluder
 	opts       Options
 	sem        chan struct{}
 
@@ -85,11 +96,15 @@ func New(db *database.DB, registry ScannerRegistry, sink scanners.ResultSink,
 	if opts.Normalizer == nil {
 		opts.Normalizer = &TargetNormalizer{}
 	}
-	return &Orchestrator{
+	o := &Orchestrator{
 		db: db, registry: registry, sink: sink, bus: bus, authorizer: authorizer,
 		opts: opts, sem: make(chan struct{}, opts.Concurrency),
 		cancels: map[uuid.UUID]context.CancelFunc{},
 	}
+	if ex, ok := authorizer.(IPExcluder); ok {
+		o.ipExcluder = ex
+	}
+	return o
 }
 
 // StartSession validates a queued session and runs it asynchronously. The
@@ -176,6 +191,19 @@ func (o *Orchestrator) runSession(sessionID, projectID uuid.UUID, rawTargets []s
 			o.markTarget(sessionID, raw, "failed", norm.Err)
 			continue
 		}
+		// SECURITY (SEC-004): the allowlist authorizes text; scanners resolve
+		// names themselves. Re-check every resolved address against the same
+		// allowlist so a DNS-rebinding name cannot smuggle a scan through an
+		// excluded or unauthorized IP, and hard-block link-local/metadata
+		// ranges (an explicit IP target entry remains the escape hatch).
+		if len(norm.ResolvedIPs) > 0 {
+			if err := o.checkResolvedIPs(ctx, projectID, raw, norm.ResolvedIPs); err != nil {
+				o.markTarget(sessionID, raw, "denied", err.Error())
+				slog.Warn("orchestration: target denied via resolved-address re-check",
+					"session", sessionID.String(), "target", raw, "err", err)
+				continue
+			}
+		}
 		o.markTarget(sessionID, raw, "pending", "")
 		approvedRaw = append(approvedRaw, raw)
 		if len(norm.ResolvedIPs) > 0 {
@@ -183,6 +211,14 @@ func (o *Orchestrator) runSession(sessionID, projectID uuid.UUID, rawTargets []s
 				"session", sessionID.String(), "target", raw, "ips", norm.ResolvedIPs)
 		}
 		execTargets = append(execTargets, norm.ExecTargets...)
+		// SECURITY (SEC-008): budget aggregate expansion across ALL targets
+		// so many small CIDRs cannot stack into an unbounded scan.
+		if len(execTargets) > o.maxAggregateTargets() {
+			o.finishSession(sessionID, started, models.ScanStatusFailed,
+				fmt.Sprintf("aggregate target budget exceeded (%d hosts; limit %d)",
+					len(execTargets), o.maxAggregateTargets()))
+			return
+		}
 	}
 
 	// ── 2. executions ───────────────────────────────────────────────────
@@ -191,7 +227,7 @@ func (o *Orchestrator) runSession(sessionID, projectID uuid.UUID, rawTargets []s
 			"no targets remained after allowlist validation and normalization")
 		return
 	}
-	execs, err := o.loadOrPrepareExecutions(ctx, sessionID, projectID, approvedRaw)
+	execs, err := o.loadOrPrepareExecutions(context.WithoutCancel(ctx), sessionID, projectID, approvedRaw)
 	if err != nil {
 		o.finishSession(sessionID, started, models.ScanStatusFailed, err.Error())
 		return
@@ -254,7 +290,12 @@ func (o *Orchestrator) runSession(sessionID, projectID uuid.UUID, rawTargets []s
 	case anyFail:
 		final = models.ScanStatusCompletedWithErrors
 	}
-	o.updateSessionCounters(sessionID, assets, findings)
+	// VER-001: findings.Service.Ingest is the single writer of session
+	// counters when a sink is configured; orchestrator only counts when it
+	// is running without ingestion (development/test mode).
+	if o.sink == nil {
+		o.updateSessionCounters(sessionID, assets, findings)
+	}
 	o.finishSession(sessionID, started, final, errMsg)
 
 	if final == models.ScanStatusCompleted || final == models.ScanStatusCompletedWithErrors {
@@ -267,6 +308,82 @@ func (o *Orchestrator) authorize(ctx context.Context, projectID uuid.UUID, targe
 		return nil
 	}
 	return o.authorizer.Authorize(ctx, projectID, target)
+}
+
+// linkLocalBlocklists are ranges a hostname must never resolve to for
+// scanning purposes (cloud metadata, link-local). Explicit IP target
+// entries still authorize themselves.
+var linkLocalBlocklists = []string{"169.254.0.0/16", "fe80::/10", "fc00::/7", "0.0.0.0/8"}
+
+var linkLocalNets = func() []*netip.Prefix {
+	var out []*netip.Prefix
+	for _, c := range linkLocalBlocklists {
+		if p, err := netip.ParsePrefix(c); err == nil {
+			out = append(out, &p)
+		}
+	}
+	return out
+}()
+
+// checkResolvedIPs re-checks DNS answers against the project's exclusions
+// and hard-blocked ranges (SEC-004). Authorizing a hostname textually must
+// not let DNS answers inside an excluded CIDR (or cloud metadata ranges)
+// through. The narrow TOCTOU window between this check and the scanner's
+// own resolution is documented residual risk.
+func (o *Orchestrator) checkResolvedIPs(ctx context.Context, projectID uuid.UUID, raw string, ips []string) error {
+	for _, ipStr := range ips {
+		addr, err := netip.ParseAddr(ipStr)
+		if err != nil {
+			return fmt.Errorf("target %s: resolver returned unparseable address %q", raw, ipStr)
+		}
+		addr = addr.Unmap()
+		for _, blk := range linkLocalNets {
+			if blk.Contains(addr) {
+				return fmt.Errorf("target %s: resolved address %s is in blocked range %s", raw, ipStr, blk)
+			}
+		}
+		if o.ipExcluder != nil {
+			excluded, err := o.ipExcluder.IsIPExcluded(ctx, projectID, addr)
+			if err != nil {
+				return fmt.Errorf("target %s: exclusion check for %s failed: %w", raw, ipStr, err)
+			}
+			if excluded {
+				return fmt.Errorf("target %s: resolved address %s matches an excluded entry", raw, ipStr)
+			}
+		}
+	}
+	return nil
+}
+
+func (o *Orchestrator) maxAggregateTargets() int {
+	if o.opts.MaxAggregateTargets > 0 {
+		return o.opts.MaxAggregateTargets
+	}
+	return 10000
+}
+
+// RecoverInterrupted fails sessions/executions left mid-flight by a previous
+// process (VER-006): a server that died mid-scan must not resurrect phantom
+// running rows. Call once at boot before serving traffic.
+func (o *Orchestrator) RecoverInterrupted(ctx context.Context) error {
+	bg, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	_, err := o.db.Exec(bg, `
+		UPDATE scanner_executions
+		SET status = 'failed', error = 'interrupted by server restart', finished_at = now()
+		WHERE status IN ('running','queued')`)
+	if err != nil {
+		return fmt.Errorf("recover interrupted executions: %w", err)
+	}
+	_, err = o.db.Exec(bg, `
+		UPDATE scan_sessions
+		SET status = 'failed', error = 'interrupted by server restart',
+		    finished_at = now(), updated_at = now()
+		WHERE status IN ('running','queued')`)
+	if err != nil {
+		return fmt.Errorf("recover interrupted sessions: %w", err)
+	}
+	return nil
 }
 
 // ValidateTargets checks every target against the project's authorization
@@ -284,6 +401,18 @@ func (o *Orchestrator) ValidateTargets(ctx context.Context, projectID uuid.UUID,
 // execution is one scanner_executions row to run.
 func (o *Orchestrator) runExecution(sessionCtx context.Context, sessionID, projectID uuid.UUID,
 	ex models.ScannerExecution, targets []scanners.Target) (status string, assetsObs, findingsFound int, errMsg string) {
+
+	// Deterministic cancellation: if the session was cancelled during target
+	// preparation (before this goroutine ran), record the terminal state now
+	// instead of racing the scanner's own ctx handling.
+	if sessionCtx.Err() != nil {
+		o.persistExecutionTerminal(ex.ID, models.ExecStatusCancelled, "", 0, 0, 0, "cancelled before execution", "")
+		o.publish(KindExecutionStatus, ExecutionStatusEvent{
+			SessionID: sessionID, ExecutionID: ex.ID, Scanner: ex.ScannerName,
+			Status: models.ExecStatusCancelled, Error: "cancelled before execution",
+		})
+		return models.ExecStatusCancelled, 0, 0, "cancelled before execution"
+	}
 
 	scanner, ok := o.registry.Get(ex.ScannerName)
 	if !ok {

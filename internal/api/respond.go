@@ -3,8 +3,12 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"unicode/utf8"
 )
 
 // WriteJSON writes an entity response.
@@ -31,10 +35,22 @@ func WriteError(w http.ResponseWriter, status int, message string) {
 	})
 }
 
-// DecodeJSON decodes a request body with a size limit.
+// DecodeJSON decodes a request body with a size limit. It rejects NUL bytes
+// and invalid UTF-8 (VER-003: PostgreSQL rejects them deep in the stack,
+// surfacing as opaque 500s — reject at the edge with a clear 400 instead).
 func DecodeJSON(r *http.Request, dst any) error {
 	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20) // 1 MiB
-	dec := json.NewDecoder(r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return errors.New("request body too large or unreadable")
+	}
+	if bytes.IndexByte(body, 0) >= 0 {
+		return errors.New("body must not contain NUL bytes")
+	}
+	if !utf8.Valid(body) {
+		return errors.New("body must be valid UTF-8")
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	return dec.Decode(dst)
 }

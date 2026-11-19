@@ -51,7 +51,12 @@ var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 // executableRe accepts a bare program name or an absolute/relative-free
 // path. Deliberately excludes every shell metacharacter: ; | & $ ` ( ) < >
 // ' " \ space, tab, newline, glob characters and braces.
-var executableRe = regexp.MustCompile(`^/?[A-Za-z0-9][A-Za-z0-9._/+@-]*$`)
+// executableRe validates manifest executable paths (SEC-005). Accepted
+// forms: a bare PATH-resolved binary name, or an absolute path. Relative
+// paths with directory components are rejected (manifest-directory
+// confusion), and the ".." sequence is rejected separately so a manifest
+// cannot point at an attacker-supplied binary inside the config tree.
+var executableRe = regexp.MustCompile(`^(?:[A-Za-z0-9][A-Za-z0-9._+@-]*|/[A-Za-z0-9][A-Za-z0-9._+@/-]*)$`)
 
 // hostnameLike asset types accepted from manifests. These mirror the
 // Target.Type vocabulary in internal/scanners/scanner.go.
@@ -220,7 +225,7 @@ func (m *Manifest) Validate() error {
 		add("adapter %q must be one of command, native", m.Adapter)
 	}
 
-	if m.Executable != "" && !executableRe.MatchString(m.Executable) {
+	if m.Executable != "" && (strings.Contains(m.Executable, "..") || !executableRe.MatchString(m.Executable)) {
 		add("executable %q contains invalid characters (shell metacharacters, "+
 			"spaces and glob characters are rejected)", m.Executable)
 	}

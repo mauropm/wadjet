@@ -643,6 +643,26 @@ func TestAssetsHTTPSurface(t *testing.T) {
 	} else if !strings.Contains(rec.Body.String(), `"created"`) {
 		t.Fatalf("history body = %s", rec.Body)
 	}
+	// VER-002: a stated project scope that does not own the resource is 404.
+	foreign := itest.NewProject(t, "").String()
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/assets/" + assetID + "?project_id=" + foreign},
+		{"GET", "/assets/" + assetID + "/history?project_id=" + foreign},
+		{"PUT", "/assets/" + assetID + "?project_id=" + foreign},
+		{"DELETE", "/assets/" + assetID + "?project_id=" + foreign},
+	} {
+		if rec := do(c.method, c.path, ""); rec.Code != http.StatusNotFound {
+			t.Fatalf("cross-project %s %s code = %d, want 404", c.method, c.path, rec.Code)
+		}
+	}
+	// Matching scope still works.
+	if rec := do("GET", "/assets/"+assetID+"?project_id="+project.String(), ""); rec.Code != http.StatusOK {
+		t.Fatalf("scoped get code = %d, want 200", rec.Code)
+	}
+	// Malformed stated scope is denied (fail closed).
+	if rec := do("GET", "/assets/"+assetID+"?project_id=not-a-uuid", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("malformed scope code = %d, want 404", rec.Code)
+	}
 	if rec := do("GET", "/projects/"+project.String()+"/observations?type=manual", ""); rec.Code != http.StatusOK {
 		t.Fatalf("observations code = %d", rec.Code)
 	} else if !strings.Contains(rec.Body.String(), "203.0.113.5") {

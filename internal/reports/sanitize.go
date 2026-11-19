@@ -161,6 +161,20 @@ func pdfText(s string) string {
 	return b.String()
 }
 
+// csvSafe neutralizes spreadsheet formula injection (SEC-012): scanner- or
+// analyst-supplied text starting with a formula trigger is prefixed with a
+// single quote so Excel/Sheets treat it as literal text, not a formula.
+func csvSafe(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
+}
+
 // slugify turns an arbitrary (possibly non-Latin) name into a lowercase
 // ASCII slug safe for file and directory names. Non-ASCII runes (including
 // emoji such as 🧪) collapse to separators. The result is never empty.

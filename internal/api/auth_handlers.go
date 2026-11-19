@@ -58,6 +58,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// SECURITY (SEC-003): registration is open only while the instance is
+	// empty (bootstrap). Once any user exists, new accounts require an
+	// authenticated admin caller — otherwise the first-login attacker could
+	// register before the bootstrap admin and claim the instance.
+	if s.auth.HasUsers(r.Context()) {
+		token := TokenFromRequest(r)
+		caller, err := s.auth.Authenticate(r.Context(), token)
+		if err != nil || caller.Role != "admin" {
+			WriteError(w, http.StatusForbidden, "registration requires an authenticated admin once users exist")
+			return
+		}
+	}
 	user, err := s.auth.CreateUser(r.Context(), body.Email, body.Name, body.Password, "user")
 	if err != nil {
 		switch {
@@ -78,7 +90,15 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if t := TokenFromRequest(r); t != "" {
 		_ = s.auth.Logout(r.Context(), t)
 	}
-	http.SetCookie(w, &http.Cookie{Name: "wadjet_session", Value: "", Path: "/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{
+		Name:     "wadjet_session",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   !s.cfg.IsDevelopment(),
+		MaxAge:   -1,
+	})
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 

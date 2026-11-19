@@ -503,6 +503,11 @@ func (s *Service) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// VER-002: stated project scope must own the resource.
+	if !api.ProjectScopeMatches(r, finding.ProjectID) {
+		api.WriteError(w, http.StatusNotFound, "not found")
+		return
+	}
 	api.WriteJSON(w, http.StatusOK, finding)
 }
 
@@ -526,6 +531,11 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		uid = &user.ID
 	}
+	if existing, err := s.Get(r.Context(), id); err == nil &&
+		!api.ProjectScopeMatches(r, existing.ProjectID) {
+		api.WriteError(w, http.StatusNotFound, "not found")
+		return
+	}
 	finding, err := s.UpdateStatus(r.Context(), id, body.Status, body.Note, uid)
 	if err != nil {
 		writeError(w, err)
@@ -537,6 +547,11 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleHistory(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathUUID(w, r, "id")
 	if !ok {
+		return
+	}
+	if existing, err := s.Get(r.Context(), id); err == nil &&
+		!api.ProjectScopeMatches(r, existing.ProjectID) {
+		api.WriteError(w, http.StatusNotFound, "not found")
 		return
 	}
 	history, err := s.History(r.Context(), id)
