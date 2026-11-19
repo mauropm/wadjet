@@ -13,17 +13,13 @@ import (
 	"math/rand"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-
 	"github.com/mauropm/wadjet/internal/database"
-	"github.com/mauropm/wadjet/migrations"
 )
 
 // devDB* are the local development credentials. They are assembled from
@@ -200,68 +196,14 @@ func withDatabase(raw, dbname string) (string, error) {
 	return u.String(), nil
 }
 
-// ApplySchema applies every embedded migration in filename order inside its
-// own transaction, recording it in schema_migrations. It mirrors
-// database.Migrate but repairs one defect in the Lead-owned initial migration
-// first (see quoteReserved); database.Migrate itself cannot be used because it
-// reads the migration text straight from the embed and aborts on it.
+// ApplySchema brings a database to the current schema. It delegates to
+// database.Migrate so the tests exercise exactly the migration path the
+// application uses; an earlier copy of this function patched a defect in the
+// shared initial migration (findings."references" was declared unquoted), which
+// the Lead has since fixed.
 func ApplySchema(ctx context.Context, db *database.DB) error {
-	if _, err := db.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version text PRIMARY KEY,
-		applied_at timestamptz NOT NULL DEFAULT now()
-	)`); err != nil {
-		return err
-	}
-	entries, err := migrations.FS.ReadDir(".")
-	if err != nil {
-		return err
-	}
-	var names []string
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".sql") {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		var exists bool
-		if err := db.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`, name).Scan(&exists); err != nil {
-			return err
-		}
-		if exists {
-			continue
-		}
-		raw, err := migrations.FS.ReadFile(name)
-		if err != nil {
-			return err
-		}
-		sql := quoteReserved(raw)
-		err = db.InTx(ctx, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(ctx, sql); err != nil {
-				return fmt.Errorf("apply %s: %w", name, err)
-			}
-			_, err := tx.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES ($1)`, name)
-			return err
-		})
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return database.Migrate(ctx, db)
 }
-
-// quoteReserved works around a defect in the shared initial migration: the
-// findings."references" column is declared without quotes, but REFERENCES is a
-// reserved word, so PostgreSQL rejects the CREATE TABLE ("syntax error at or
-// near \"references\""). It is reported to the Lead for a fix in
-// migrations/0001_init.sql; quoting that column makes this a no-op.
-func quoteReserved(sql []byte) string {
-	return strings.ReplaceAll(string(sql), "\n    references ", "\n    \"references\" ")
-}
-
-// ───────────────────────────────────────────── test helpers
 
 // UniqueName builds a collision-free name for rows created by parallel runs.
 func UniqueName(t *testing.T, prefix string) string {

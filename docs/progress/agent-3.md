@@ -42,16 +42,18 @@ gofmt -l internal/                                     clean
 go vet ./internal/...                                  clean
 go build ./...                                         clean
 go test -count=1 ./internal/{projects,targets,assets,findings,profiles}/...
-  ok  internal/projects   1.66s   9 tests
-  ok  internal/targets    1.66s   8 tests
-  ok  internal/assets     1.67s  12 tests
-  ok  internal/findings   1.67s  21 tests
-  ok  internal/profiles   1.65s  13 tests
-go test -race -count=3 ./internal/findings/            ok (2.96s)
+  ok  internal/projects   1.74s   8 tests
+  ok  internal/targets    1.74s   7 tests
+  ok  internal/assets     1.73s  11 tests
+  ok  internal/findings   1.74s  20 tests
+  ok  internal/profiles   1.73s  12 tests
+go test -race -count=2 ./internal/findings/ ./internal/assets/   ok
 ```
 
-63 tests, all real integration tests: `TestMain` in each package opens a live
-PostgreSQL connection via `database.Open` and applies the schema once per run.
+58 tests, all real integration tests: `TestMain` in each package opens a live
+PostgreSQL connection via `database.Open`, creates a private `wadjet_it_<pkg>_<rand>`
+database and migrates it through `database.Migrate` once per run.
+`go test -race -count=2 ./internal/findings/ ./internal/assets/` is also clean.
 
 ## Implementation notes
 
@@ -136,11 +138,14 @@ its own database. `WADJET_ITEST_SHARED=1` opts out and uses the shared database 
   keep `assets.UpsertFromScan` usable standalone *and* transaction-scoped, `assets` also
   exports `UpsertFromScanTx(ctx, q assets.Querier, ...)` where `assets.Querier` is
   satisfied by both `*database.DB` and `pgx.Tx`. No contract change needed.
-* **Blocker reported to the Lead (fixed outside my scope):** `migrations/0001_init.sql`
-  declared `references jsonb` unquoted in `findings`, so a fresh `database.Migrate` aborted
-  with `ERROR: syntax error at or near "references"`. `itest.ApplySchema` worked around it
-  with a `quoteReserved` rewrite; once the migration quotes the column the workaround is a
-  no-op. Agents other than the Lead must not edit `migrations/`.
+* **Resolved (Lead fixed it):** `migrations/0001_init.sql` had declared
+  `references jsonb` unquoted in `findings`, so a fresh `database.Migrate` aborted with
+  `ERROR: syntax error at or near "references"`. Verified fixed on 2026-11-19:
+  `database.Migrate` on an empty database now produces the 20 public tables, so
+  `itest.ApplySchema` is a thin delegation to `database.Migrate` — the tests apply the
+  schema through the same code path the application uses (the earlier
+  quote-the-reserved-word workaround was removed). Agents other than the Lead must not
+  edit `migrations/`, and none did.
 * `inet` columns cannot be scanned into the shared `*string` fields of `models.Asset`
   (pgx rejects `inet` binary → `**string`), so asset queries select `host(ip)` /
   `host(ipv6)`. Any package reading those columns must do the same.

@@ -1,0 +1,196 @@
+openapi: 3.0.3
+info:
+  title: WADJET API
+  version: 1.0.0
+  description: >-
+    👁️ WADJET — open-source vulnerability intelligence platform.
+    We see what your assets are hiding.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+paths:
+  /auth/login:
+    post:
+      security: []
+      summary: Log in, receive token + session cookie
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, password], properties: { email: { type: string }, password: { type: string } } } } } }
+      responses:
+        "200": { description: user + token }
+        "401": { $ref: "#/components/responses/Error" }
+  /auth/register:
+    post:
+      security: []
+      summary: Register a user (password ≥ 10 chars)
+      responses: { "201": { description: created }, "409": { $ref: "#/components/responses/Error" } }
+  /auth/logout:
+    post: { summary: Revoke current session, clears cookie, responses: { "200": { description: ok } } }
+  /auth/me:
+    get: { summary: Current user, responses: { "200": { description: user }, "401": { $ref: "#/components/responses/Error" } } }
+  /projects:
+    get:
+      summary: List/search projects
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [active, archived] } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses: { "200": { description: list envelope of Project } }
+    post:
+      summary: Create project
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, description: { type: string }, tags: { type: array, items: { type: string } }, settings: { type: object } } } } } }
+      responses: { "201": { description: Project }, "400": { $ref: "#/components/responses/Error" } }
+  /projects/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: Project }, "404": { $ref: "#/components/responses/Error" } } }
+    put: { responses: { "200": { description: Project } } }
+    delete:
+      parameters: [ { name: force, in: query, schema: { type: boolean } } ]
+      responses: { "204": { description: deleted }, "409": { $ref: "#/components/responses/Error" } }
+  /projects/{id}/archive:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post: { responses: { "200": { description: archived } } }
+  /projects/{id}/clone:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post:
+      summary: Clone configuration for a new assessment (never copies history)
+      requestBody: { required: false, content: { application/json: { schema: { type: object, properties: { name: { type: string }, description: { type: string }, copy: { type: object, properties: { settings: { type: boolean }, targets: { type: boolean }, scanner_configs: { type: boolean }, profiles: { type: boolean }, tags: { type: boolean }, report_prefs: { type: boolean } } } } } } } }
+      responses: { "201": { description: cloned Project } }
+  /projects/{id}/targets:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: list of ProjectTarget } } }
+    post:
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [target], properties: { target: { type: string }, target_type: { type: string, enum: [auto, ip, ipv6, hostname, domain, cidr, url] }, excluded: { type: boolean }, note: { type: string } } } } } }
+      responses: { "201": { description: ProjectTarget } }
+  /targets/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    put: { responses: { "200": { description: ProjectTarget } } }
+    delete: { responses: { "204": { description: deleted } } }
+  /projects/{id}/assets:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: list of Asset } } }
+    post: { responses: { "201": { description: Asset }, "409": { $ref: "#/components/responses/Error" } } }
+  /assets/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: Asset + latest observation } } }
+    put: { responses: { "200": { description: Asset } } }
+    delete: { responses: { "204": { description: deleted } } }
+  /assets/{id}/history:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: list of AssetObservation } } }
+  /projects/{id}/observations:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: recent observations } } }
+  /scanners:
+    get: { responses: { "200": { description: list of ScannerRecord (manifest incl. config schema) } } }
+  /scanners/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: ScannerRecord } } }
+  /scanners/{id}/enabled:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    put: { responses: { "200": { description: ScannerRecord } } }
+  /scanners/{id}/check:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post: { responses: { "200": { description: ScannerRecord after version probe } } }
+  /projects/{id}/profiles:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: list of ScanProfile } } }
+    post: { responses: { "201": { description: ScanProfile }, "409": { $ref: "#/components/responses/Error" } } }
+  /profiles/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: ScanProfile } } }
+    put: { responses: { "200": { description: ScanProfile } } }
+    delete: { responses: { "204": { description: deleted } } }
+  /projects/{id}/scans:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: list of ScanSession } } }
+    post:
+      summary: Create scan session (targets validated against project allowlist)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [targets], properties: { name: { type: string }, targets: { type: array, items: { type: string } }, scanner_configs: { type: array, items: { type: object, properties: { scanner: { type: string }, config: { type: object } } } }, profile_id: { type: string, format: uuid } } } } } }
+      responses: { "201": { description: ScanSession }, "400": { $ref: "#/components/responses/Error" } }
+  /scans/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: ScanSession with executions } } }
+  /scans/{id}/start:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post: { responses: { "202": { description: queued }, "409": { $ref: "#/components/responses/Error" } } }
+  /scans/{id}/cancel:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post: { responses: { "200": { description: cancelled } } }
+  /scans/{id}/events:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      summary: SSE stream filtered to one session
+      responses: { "200": { description: "text/event-stream", content: { "text/event-stream": {} } } }
+  /events:
+    get:
+      summary: Global SSE stream (scan + report events)
+      responses: { "200": { description: "text/event-stream", content: { "text/event-stream": {} } } }
+  /projects/{id}/findings:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      parameters:
+        - { name: severity, in: query, schema: { type: string, enum: [critical, high, medium, low, info] } }
+        - { name: status, in: query, schema: { type: string, enum: [open, confirmed, remediated, accepted_risk, false_positive] } }
+        - { name: scanner, in: query, schema: { type: string } }
+        - { name: asset_id, in: query, schema: { type: string, format: uuid } }
+        - { name: q, in: query, schema: { type: string } }
+      responses: { "200": { description: list of Finding } }
+    post: { responses: { "201": { description: Finding } } }
+  /findings/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: Finding } } }
+  /findings/{id}/status:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    put:
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [status], properties: { status: { type: string, enum: [open, confirmed, remediated, accepted_risk, false_positive] }, note: { type: string } } } } } }
+      responses: { "200": { description: updated Finding } }
+  /findings/{id}/history:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: status history + observations } } }
+  /findings/{id}/report:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post: { responses: { "201": { description: queued Report } } }
+  /projects/{id}/reports/scan:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post:
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [session_id], properties: { session_id: { type: string, format: uuid } } } } } }
+      responses: { "201": { description: queued Report } }
+  /projects/{id}/reports/findings:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post:
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [consolidated], properties: { consolidated: { type: boolean }, severity: { type: array, items: { type: string } }, asset_id: { type: string, format: uuid }, session_id: { type: string, format: uuid } } } } } }
+      responses: { "201": { description: queued Report (PDF or ZIP) } }
+  /reports:
+    get:
+      parameters:
+        - { name: project_id, in: query, schema: { type: string, format: uuid } }
+        - { name: type, in: query, schema: { type: string } }
+      responses: { "200": { description: list of Report } }
+  /reports/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get: { responses: { "200": { description: Report } } }
+  /reports/{id}/download:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      summary: Download persisted artifact without regeneration
+      responses:
+        "200": { description: application/pdf or application/zip }
+        "404": { $ref: "#/components/responses/Error" }
+  /audit:
+    get:
+      parameters: [ { name: limit, in: query, schema: { type: integer } } ]
+      responses: { "200": { description: list of AuditLog } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+    cookieAuth: { type: apiKey, in: cookie, name: wadjet_session }
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+  responses:
+    Error:
+      description: standard error envelope
+      content:
+        application/json:
+          schema: { type: object, properties: { error: { type: object, properties: { message: { type: string } } } } }
