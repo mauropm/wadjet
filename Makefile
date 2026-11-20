@@ -54,6 +54,10 @@ db:
 ## Need the API on the LAN anyway? WADJET_DEV_BIND_ALL=1 make dev.
 dev: build
 	@mkdir -p data/reports data/raw data/scanwork
+	@# Reap stale dev stacks first: a leftover Vite squatting :5173 would
+	@# make Vite silently bump to :5174 while the banner (and the browser)
+	@# still point at :5173 — i.e. the OLD server with its outdated proxy.
+	@$(MAKE) --no-print-directory stop >/dev/null 2>&1 || true
 	@PORT=$(DEV_PORT); \
 	while lsof -nP -iTCP:$$PORT -sTCP:LISTEN >/dev/null 2>&1; do \
 		PORT=$$((PORT+1)); \
