@@ -644,15 +644,31 @@ func TestSSEStreamExitsOnEviction(t *testing.T) {
 
 	// Overwhelm the subscriber: buffer (64) + eviction threshold + slack,
 	// none of it consumed by the handler (the test reads only afterwards).
+	// Bursts repeat until the first one lands on an attached subscription —
+	// under loaded CI a single burst can be published before attach, which
+	// would leave the handler waiting with an empty queue.
+	firstBurst := make(chan time.Time, 1)
+	stop := make(chan struct{})
+	defer close(stop)
 	go func() {
-		time.Sleep(200 * time.Millisecond) // let the subscription attach
-		for i := 0; i < 128; i++ {
-			bus.Publish(events.Event{Topic: "scan", Kind: "scan.progress",
-				Payload: map[string]any{"session_id": sessionID.String(), "assets_processed": i}})
+		for {
+			for i := 0; i < 128; i++ {
+				bus.Publish(events.Event{Topic: "scan", Kind: "scan.progress",
+					Payload: map[string]any{"session_id": sessionID.String(), "assets_processed": i}})
+			}
+			select {
+			case firstBurst <- time.Now():
+			default:
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
 		}
 	}()
 
-	start := time.Now()
+	start := <-firstBurst
 	done := make(chan error, 1)
 	go func() {
 		buf := &bytes.Buffer{}
@@ -667,7 +683,7 @@ func TestSSEStreamExitsOnEviction(t *testing.T) {
 		if d := time.Since(start); d > 5*time.Second {
 			t.Fatalf("stream took %v to end after eviction — busy-loop", d)
 		}
-	case <-time.After(8 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("SSE handler never exited after bus eviction (busy-loop)")
 	}
 }

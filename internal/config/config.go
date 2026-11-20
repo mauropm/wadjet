@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds all runtime configuration for the WADJET server.
@@ -50,6 +51,17 @@ func Load() *Config {
 
 // IsDevelopment reports whether the server runs in development mode.
 func (c *Config) IsDevelopment() bool { return c.Env != "production" }
+
+// IsStrictDevelopment reports whether WADJET_ENV is *exactly* "development"
+// (case-insensitive, whitespace-trimmed). Unlike IsDevelopment's fail-open
+// `!= "production"`, this allowlist classifies ambiguous values ("Production",
+// "prod", typos) as NOT development. SECURITY: gate the no-login dev
+// convenience (WADJET_DEV_NO_LOGIN) with this predicate so a leaked flag
+// combined with an env typo can never yield an unauthenticated admin
+// (SEC-DEV-1).
+func (c *Config) IsStrictDevelopment() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Env), "development")
+}
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {

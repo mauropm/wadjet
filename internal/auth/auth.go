@@ -93,6 +93,36 @@ func (s *Service) CreateUser(ctx context.Context, email, name, password, role st
 }
 
 // Login validates credentials and issues a session token. The token is
+// EnsureUserByEmail creates the account when no row with that email exists
+// (idempotent). Used by development no-login mode to guarantee the
+// impersonated admin exists even in databases seeded with other users.
+func (s *Service) EnsureUserByEmail(ctx context.Context, email, name, password, role string) error {
+	var count int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM users WHERE email = $1`,
+		strings.ToLower(strings.TrimSpace(email))).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	_, err := s.CreateUser(ctx, email, name, password, role)
+	return err
+}
+
+// UserByEmail loads an account by email (case-insensitive). Used by the
+// development no-login mode to resolve the bootstrap admin principal.
+func (s *Service) UserByEmail(ctx context.Context, email string) (*models.User, error) {
+	var u models.User
+	err := s.db.QueryRow(ctx,
+		`SELECT id, email, name, role FROM users WHERE email = $1`,
+		strings.ToLower(strings.TrimSpace(email))).
+		Scan(&u.ID, &u.Email, &u.Name, &u.Role)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 // returned once; only its SHA-256 hash is stored.
 func (s *Service) Login(ctx context.Context, email, password string) (*models.User, string, error) {
 	email = strings.ToLower(strings.TrimSpace(email))

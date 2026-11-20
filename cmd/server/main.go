@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log"
 	"net/http"
@@ -75,6 +77,29 @@ func main() {
 	if err := authService.EnsureAdmin(ctx, cfg.AdminEmail, cfg.AdminPassword); err != nil {
 		log.Fatalf("wadjet: bootstrap admin failed: %v", err)
 	}
+	// Development no-login mode (`make dev`) impersonates this account on
+	// every unauthenticated request. SEC-DEV-1: the flag is honoured only
+	// when WADJET_ENV is *exactly* "development" — an ambiguous value
+	// ("Production", "prod", a typo) combined with a leaked flag is a
+	// configuration contradiction, so refuse the boot instead of guessing.
+	devNoLogin := os.Getenv("WADJET_DEV_NO_LOGIN") == "1"
+	if devNoLogin {
+		if !cfg.IsStrictDevelopment() {
+			log.Fatalf("wadjet: refusing to start: WADJET_DEV_NO_LOGIN=1 requires WADJET_ENV=development exactly (got %q)", cfg.Env)
+		}
+		// The account must exist even in databases already seeded with
+		// other users (EnsureAdmin only bootstraps empties). SEC-DEV-2: it
+		// gets a random per-boot password, never the shipped default, so no
+		// publicly-known credential is ever persisted into a shared DB —
+		// no-login mode needs the row only as a principal, not its password.
+		nonce := make([]byte, 32)
+		if _, err := rand.Read(nonce); err != nil {
+			log.Fatalf("wadjet: dev no-login admin setup failed: %v", err)
+		}
+		if err := authService.EnsureUserByEmail(ctx, cfg.AdminEmail, "Administrator", hex.EncodeToString(nonce), "admin"); err != nil {
+			log.Fatalf("wadjet: dev no-login admin setup failed: %v", err)
+		}
+	}
 
 	for _, dir := range []string{cfg.ReportDir, cfg.RawOutputDir, cfg.ScanWorkDir} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -129,14 +154,27 @@ func main() {
 
 	handler := api.NewServer(cfg, db, authService, auditLogger, bus, extra)
 
+	// SEC-DEV-3: with no-login mode active the listener hands full admin to
+	// any unauthenticated network peer, so bind loopback unless the operator
+	// explicitly asks for all interfaces.
+	bind := ":" + cfg.Port
+	if devNoLogin {
+		if os.Getenv("WADJET_DEV_BIND_ALL") == "1" {
+			log.Printf("wadjet: WARNING — WADJET_DEV_NO_LOGIN with WADJET_DEV_BIND_ALL=1: unauthenticated admin on every interface")
+		} else {
+			bind = "127.0.0.1:" + cfg.Port
+		}
+		log.Printf("wadjet: WARNING — WADJET_DEV_NO_LOGIN=1: unauthenticated requests are served as admin %s (local development only)", cfg.AdminEmail)
+	}
+
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              bind,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go func() {
-		log.Printf("👁️ WADJET listening on :%s (%s)", cfg.Port, cfg.Env)
+		log.Printf("👁️ WADJET listening on %s (%s)", bind, cfg.Env)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("wadjet: server error: %v", err)
 		}

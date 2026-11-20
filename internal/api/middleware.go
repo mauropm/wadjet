@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -41,12 +42,45 @@ func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
 		}
 		user, err := s.auth.Authenticate(r.Context(), token)
 		if err != nil {
+			if dev := s.devBypassUser(r.Context()); dev != nil {
+				next.ServeHTTP(w, WithUser(r, dev))
+				return
+			}
 			WriteError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
 		ctx := context.WithValue(r.Context(), userCtxKey, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// devBypassUser implements the `make dev` local-development convenience:
+// when WADJET_DEV_NO_LOGIN=1 AND WADJET_ENV is exactly "development",
+// unauthenticated requests are served as the bootstrap admin (a real users
+// row, so created_by foreign keys stay valid).
+//
+// SECURITY: this is a login *convenience for local development*, not an
+// access-control feature. It is inert unless BOTH conditions hold —
+// IsStrictDevelopment (allowlist: a leaked flag + an env typo like
+// "Production" is NOT enough, SEC-DEV-1) and the explicit flag — so a
+// production boot can never impersonate. The principal is resolved per
+// request, never cached, so demoting or deleting the admin row takes
+// effect immediately (SEC-DEV-5). Returns nil (deny, the caller 401s)
+// otherwise.
+func (s *Server) devBypassUser(ctx context.Context) *models.User {
+	if !s.cfg.IsStrictDevelopment() || os.Getenv("WADJET_DEV_NO_LOGIN") != "1" {
+		return nil
+	}
+	u, err := s.auth.UserByEmail(ctx, s.cfg.AdminEmail)
+	if err != nil {
+		slog.Warn("api: dev no-login mode could not resolve the bootstrap admin",
+			"email", s.cfg.AdminEmail, "err", err)
+		return nil
+	}
+	if u.Role != "admin" {
+		return nil // never impersonate a non-admin account
+	}
+	return u
 }
 
 func bearerToken(r *http.Request) string {

@@ -97,10 +97,24 @@ all persistence; no Redis/Kafka/queue infrastructure.
 
 ## Development
 
+The Makefile is the entry point for day-to-day work:
+
 ```bash
-go build ./... && go test ./...     # backend
-cd frontend && npm run build        # frontend
+make          # full build: server binary (bin/server) + frontend bundle (frontend/dist)
+make dev      # local development WITHOUT login: API on :8080 + Vite on :5173
+make stop     # kill all WADJET servers (never touches PostgreSQL)
+make clean    # remove build artifacts (keeps ./data and the database)
+make test     # go test ./...
+make db       # start the PostgreSQL container
 ```
+
+`make dev` runs the API with `WADJET_DEV_NO_LOGIN=1`, which serves every
+unauthenticated request as the bootstrap admin so the UI opens straight to
+the dashboard. The bypass requires `WADJET_ENV` to be exactly `development`
+**and** the flag set explicitly — anything else (an env typo, `production`,
+a leaked flag) is rejected at boot — and while active the API binds
+`127.0.0.1` only (`WADJET_DEV_BIND_ALL=1` overrides). A production boot can
+never impersonate.
 
 Requires Go 1.26+, Node 22+, Docker (for PostgreSQL and the scanner runtime).
 
