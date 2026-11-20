@@ -66,37 +66,49 @@ func main() {
 	}
 
 	authService := auth.NewService(db, cfg.SessionSecret)
+
+	// Development no-login mode (`make dev`) impersonates the bootstrap
+	// admin on every unauthenticated request. SEC-DEV-1: the flag is
+	// honoured only when WADJET_ENV is *exactly* "development" — an
+	// ambiguous value ("Production", "prod", a typo) combined with a leaked
+	// flag is a configuration contradiction, so refuse the boot before any
+	// listener opens or row is written, rather than guessing.
+	devNoLogin := os.Getenv("WADJET_DEV_NO_LOGIN") == "1"
+	if devNoLogin && !cfg.IsStrictDevelopment() {
+		log.Fatalf("wadjet: refusing to start: WADJET_DEV_NO_LOGIN=1 requires WADJET_ENV=development exactly (got %q)", cfg.Env)
+	}
+
+	// SEC-DEV-2 (VER-SDEV-2a): in no-login mode the admin row is needed
+	// only as an impersonation principal, so it is bootstrapped — on BOTH
+	// the empty-DB path (EnsureAdmin) and the seeded-DB path
+	// (EnsureUserByEmail) — with a random per-boot password. The shipped
+	// default "wadjet-admin" is never persisted while the flag is set, so
+	// no publicly-known credential can survive in a dev database that is
+	// later copied, restored, or exposed via WADJET_DEV_BIND_ALL.
+	adminPassword := cfg.AdminPassword
+	var nonce [32]byte
+	if devNoLogin {
+		if _, err := rand.Read(nonce[:]); err != nil {
+			log.Fatalf("wadjet: dev no-login admin setup failed: %v", err)
+		}
+		adminPassword = hex.EncodeToString(nonce[:])
+	}
+
 	// SECURITY (SEC-005): production must not boot with the shipped default
 	// admin password — anyone knowing the product can claim the instance.
-	if cfg.AdminPassword == "wadjet-admin" {
+	if cfg.AdminPassword == "wadjet-admin" && !devNoLogin {
 		if !cfg.IsDevelopment() {
 			log.Fatal("wadjet: refusing to start in production with the default WADJET_ADMIN_PASSWORD")
 		}
 		log.Printf("wadjet: WARNING — using default admin password; set WADJET_ADMIN_PASSWORD before any non-local deployment")
 	}
-	if err := authService.EnsureAdmin(ctx, cfg.AdminEmail, cfg.AdminPassword); err != nil {
+	if err := authService.EnsureAdmin(ctx, cfg.AdminEmail, adminPassword); err != nil {
 		log.Fatalf("wadjet: bootstrap admin failed: %v", err)
 	}
-	// Development no-login mode (`make dev`) impersonates this account on
-	// every unauthenticated request. SEC-DEV-1: the flag is honoured only
-	// when WADJET_ENV is *exactly* "development" — an ambiguous value
-	// ("Production", "prod", a typo) combined with a leaked flag is a
-	// configuration contradiction, so refuse the boot instead of guessing.
-	devNoLogin := os.Getenv("WADJET_DEV_NO_LOGIN") == "1"
 	if devNoLogin {
-		if !cfg.IsStrictDevelopment() {
-			log.Fatalf("wadjet: refusing to start: WADJET_DEV_NO_LOGIN=1 requires WADJET_ENV=development exactly (got %q)", cfg.Env)
-		}
 		// The account must exist even in databases already seeded with
-		// other users (EnsureAdmin only bootstraps empties). SEC-DEV-2: it
-		// gets a random per-boot password, never the shipped default, so no
-		// publicly-known credential is ever persisted into a shared DB —
-		// no-login mode needs the row only as a principal, not its password.
-		nonce := make([]byte, 32)
-		if _, err := rand.Read(nonce); err != nil {
-			log.Fatalf("wadjet: dev no-login admin setup failed: %v", err)
-		}
-		if err := authService.EnsureUserByEmail(ctx, cfg.AdminEmail, "Administrator", hex.EncodeToString(nonce), "admin"); err != nil {
+		// other users (EnsureAdmin only bootstraps empties).
+		if err := authService.EnsureUserByEmail(ctx, cfg.AdminEmail, "Administrator", adminPassword, "admin"); err != nil {
 			log.Fatalf("wadjet: dev no-login admin setup failed: %v", err)
 		}
 	}

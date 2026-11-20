@@ -67,6 +67,8 @@ func DecodeJSON(r *http.Request, dst any) error {
 	return nil
 }
 
+var rawMessageType = reflect.TypeOf(json.RawMessage(nil))
+
 // decodedHasNUL recursively inspects decoded JSON values (structs, maps,
 // slices, pointers, interfaces) for strings carrying a NUL byte.
 func decodedHasNUL(v reflect.Value) bool {
@@ -76,11 +78,16 @@ func decodedHasNUL(v reflect.Value) bool {
 	case reflect.Pointer, reflect.Interface:
 		return !v.IsNil() && decodedHasNUL(v.Elem())
 	case reflect.Slice, reflect.Array:
-		// Byte slices carry raw JSON payloads (json.RawMessage): their NULs
-		// live in the body as \u0000 escapes and survive verbatim into
-		// jsonb columns, where PostgreSQL rejects them later as an opaque
-		// 500 (same class as DEF-1 — NEW-2). Re-decode and walk the value.
-		if v.Type().Elem().Kind() == reflect.Uint8 {
+		// Only json.RawMessage carries raw JSON *text* whose \u0000 escapes
+		// would survive verbatim into jsonb columns and surface later as an
+		// opaque 500 (same class as DEF-1 — NEW-2). Re-decode and walk it.
+		//
+		// This must NOT match every byte-typed aggregate: uuid.UUID is a
+		// [16]byte ARRAY whose *binary* form legitimately contains zero
+		// bytes (≈39% of random UUIDs), and base64-decoded []byte fields
+		// likewise. Treating those as raw JSON text would 400 a huge share
+		// of perfectly valid requests.
+		if v.Kind() == reflect.Slice && v.Type() == rawMessageType {
 			if v.Len() == 0 {
 				return false
 			}
