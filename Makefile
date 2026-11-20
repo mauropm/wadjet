@@ -63,7 +63,10 @@ dev: build
 		PORT=$$((PORT+1)); \
 		if [ $$PORT -gt $$(($(DEV_PORT)+19)) ]; then echo "✗ no free API port in $(DEV_PORT)..$$(($(DEV_PORT)+19))"; exit 1; fi; \
 	done; \
-	if [ "$$PORT" != "$(DEV_PORT)" ]; then echo "note: :$(DEV_PORT) is held by another process — API uses :$$PORT"; fi; \
+	if [ "$$PORT" != "$(DEV_PORT)" ]; then \
+		echo "note: :$(DEV_PORT) is held by ANOTHER APP (its own login lives there) —"; \
+		echo "      the WADJET dev API uses :$$PORT and the UI :5173 below, not :$(DEV_PORT)"; \
+	fi; \
 	$(DEV_ENV) WADJET_PORT=$$PORT $(CURDIR)/$(BIN) > .dev-server.log 2>&1 & echo $$! > $(SERVER_PID); \
 	sleep 1; \
 	if ! kill -0 $$(cat $(SERVER_PID)) 2>/dev/null; then \
@@ -71,9 +74,10 @@ dev: build
 	fi; \
 	echo "👁️  WADJET dev (NO LOGIN — you are $(DEV_ADMIN_EMAIL), no usr/pass asked)"; \
 	echo "   API  http://127.0.0.1:$$PORT/api/v1"; \
-	echo "   UI   http://127.0.0.1:5173"; \
+	echo "   UI   http://127.0.0.1:5173   <- open THIS, never :$(DEV_PORT)"; \
 	echo "   log  .dev-server.log   (Ctrl-C stops both)"; \
 	trap 'PID=$$(cat $(SERVER_PID) 2>/dev/null); [ -n "$$PID" ] && kill $$PID 2>/dev/null; rm -f $(SERVER_PID); exit 0' INT TERM; \
+	( sleep 2; command -v open >/dev/null 2>&1 && open http://127.0.0.1:5173 || true ) & \
 	(cd frontend && [ -d node_modules ] || $(NPM) install; WADJET_API_PORT=$$PORT $(NPM) run dev); \
 	PID=$$(cat $(SERVER_PID) 2>/dev/null); [ -n "$$PID" ] && kill $$PID 2>/dev/null; rm -f $(SERVER_PID); true
 

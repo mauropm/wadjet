@@ -101,7 +101,8 @@ The Makefile is the entry point for day-to-day work:
 
 ```bash
 make          # full build: server binary (bin/server) + frontend bundle (frontend/dist)
-make dev      # local development WITHOUT login: API on :8080 + Vite on :5173
+make dev      # local development WITHOUT login: API + Vite on :5173 (opens the browser;
+              # never open :8080 for this — if a container holds it, that's a different app)
 make stop     # kill all WADJET servers (never touches PostgreSQL)
 make clean    # remove build artifacts (keeps ./data and the database)
 make test     # go test ./...
