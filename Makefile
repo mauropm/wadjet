@@ -28,7 +28,7 @@ DEV_ENV = DATABASE_URL='$(DEV_DB)' \
 SERVER_PID := .dev-server.pid
 
 .DEFAULT_GOAL := all
-.PHONY: all build frontend test db dev run stop clean status
+.PHONY: all build frontend test db dev dev-local run stop clean status
 
 ## make (default): full build — server binary + frontend bundle.
 all: build frontend
@@ -49,21 +49,32 @@ db:
 ## Local development WITHOUT login: starts the API impersonating the
 ## bootstrap admin (WADJET_DEV_NO_LOGIN=1, development mode only, bound to
 ## 127.0.0.1) and the Vite dev server with hot reload. Ctrl-C stops both.
+## If $(DEV_PORT) is held by another process (e.g. a docker container),
+## the API auto-bumps to the next free port and Vite's /api proxy follows.
 ## Need the API on the LAN anyway? WADJET_DEV_BIND_ALL=1 make dev.
 dev: build
 	@mkdir -p data/reports data/raw data/scanwork
-	@$(DEV_ENV) $(CURDIR)/$(BIN) > .dev-server.log 2>&1 & echo $$! > $(SERVER_PID); \
+	@PORT=$(DEV_PORT); \
+	while lsof -nP -iTCP:$$PORT -sTCP:LISTEN >/dev/null 2>&1; do \
+		PORT=$$((PORT+1)); \
+		if [ $$PORT -gt $$(($(DEV_PORT)+19)) ]; then echo "✗ no free API port in $(DEV_PORT)..$$(($(DEV_PORT)+19))"; exit 1; fi; \
+	done; \
+	if [ "$$PORT" != "$(DEV_PORT)" ]; then echo "note: :$(DEV_PORT) is held by another process — API uses :$$PORT"; fi; \
+	$(DEV_ENV) WADJET_PORT=$$PORT $(CURDIR)/$(BIN) > .dev-server.log 2>&1 & echo $$! > $(SERVER_PID); \
 	sleep 1; \
 	if ! kill -0 $$(cat $(SERVER_PID)) 2>/dev/null; then \
 		echo "✗ API failed to start — last log lines:"; tail -5 .dev-server.log; rm -f $(SERVER_PID); exit 1; \
 	fi; \
-	echo "👁️  WADJET dev (NO LOGIN — you are $(DEV_ADMIN_EMAIL))"; \
-	echo "   API  http://127.0.0.1:$(DEV_PORT)/api/v1"; \
+	echo "👁️  WADJET dev (NO LOGIN — you are $(DEV_ADMIN_EMAIL), no usr/pass asked)"; \
+	echo "   API  http://127.0.0.1:$$PORT/api/v1"; \
 	echo "   UI   http://127.0.0.1:5173"; \
 	echo "   log  .dev-server.log   (Ctrl-C stops both)"; \
 	trap 'PID=$$(cat $(SERVER_PID) 2>/dev/null); [ -n "$$PID" ] && kill $$PID 2>/dev/null; rm -f $(SERVER_PID); exit 0' INT TERM; \
-	(cd frontend && [ -d node_modules ] || $(NPM) install; $(NPM) run dev); \
+	(cd frontend && [ -d node_modules ] || $(NPM) install; WADJET_API_PORT=$$PORT $(NPM) run dev); \
 	PID=$$(cat $(SERVER_PID) 2>/dev/null); [ -n "$$PID" ] && kill $$PID 2>/dev/null; rm -f $(SERVER_PID); true
+
+## Alias for `make dev` — same no-login local development stack.
+dev-local: dev
 
 ## Run the built binary (real auth) with development defaults.
 run: build
@@ -77,7 +88,7 @@ stop:
 	@test -f $(SERVER_PID) && kill $$(cat $(SERVER_PID)) 2>/dev/null || true
 	@rm -f $(SERVER_PID)
 	@pkill -f '^$(CURDIR)/bin/server' 2>/dev/null || true
-	@pkill -f '^$(CURDIR)/frontend/node_modules/.*vite' 2>/dev/null || true
+	@pkill -f 'node $(CURDIR)/frontend/node_modules/.*vite' 2>/dev/null || true
 	@echo "✓ all WADJET servers stopped"
 
 status:

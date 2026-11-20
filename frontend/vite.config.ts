@@ -16,7 +16,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        // `make dev` shares the chosen API port via WADJET_API_PORT
+        // (auto-bumped when 8080 is taken by another process).
+        target: `http://127.0.0.1:${process.env.WADJET_API_PORT ?? '8080'}`,
         changeOrigin: true,
       },
     },
