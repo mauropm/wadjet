@@ -6,7 +6,7 @@ import {
   useMemo,
   useState,
 } from 'react';
-import { authApi, clearToken, getToken, setToken } from '@/api/client';
+import { authApi, clearToken, setToken } from '@/api/client';
 import type { User } from '@/lib/types';
 
 interface AuthState {
@@ -21,14 +21,16 @@ const Ctx = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [booting, setBooting] = useState<boolean>(!!getToken());
+  const [booting, setBooting] = useState<boolean>(true);
 
   useEffect(() => {
     let cancelled = false;
-    if (!getToken()) {
-      setBooting(false);
-      return;
-    }
+    // Always probe /auth/me, token or not: the SERVER is the authority on
+    // who is authenticated. That is what makes development no-login mode
+    // (WADJET_DEV_NO_LOGIN, `make dev`) work — an unauthenticated probe
+    // resolves to the bootstrap admin there. In normal deployments the
+    // tokenless probe just 401s and the router shows the login page, one
+    // cheap request the way it already was.
     authApi
       .me()
       .then((u) => {
